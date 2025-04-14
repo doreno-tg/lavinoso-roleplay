@@ -1,0 +1,243 @@
+local AmbientSpawnsHandler = {}
+
+local GeneralFunctions = require(game.ReplicatedStorage.GeneralFunctions)
+
+local WaypointsList = require(game.ServerScriptService.WaypointsList)
+
+local WantedHandler = require(game.ServerScriptService.WantedHandler)
+
+local VehicleSeating = require(game.ReplicatedStorage.VehicleSeating)
+
+local VehicleHandler = require(game.ServerScriptService.VehicleHandler)
+
+local VehicleList = require(game.ReplicatedStorage.VehicleList)
+
+local NPCHandler = require(game.ServerScriptService.NPCHandler)
+
+local NPCClass = require(game.ServerScriptService.NPCClass)
+
+function AmbientSpawnsHandler:SpawnAmbientVehicleParked(VehicleName)
+	local Vehicle, VehicleInstance = VehicleHandler:SpawnVehicle(VehicleName)
+	
+	local VehicleInfo = VehicleList[VehicleName]
+	
+	local PaintColors = VehicleInfo.Ambient.SpawnColors
+
+	VehicleInstance:PaintVehicle(PaintColors[math.random(1, #PaintColors)])
+	
+	VehicleInstance:SetDirtLevel(math.random())
+	
+	local ChassisHandler = require(Vehicle.Scripts.ChassisHandler)
+	
+	local RandomSteer = Random.new()
+	
+	ChassisHandler:SetSteer(RandomSteer:NextNumber(-1, 1))
+	
+	ChassisHandler:SetParkingBrakes(true)
+	
+	VehicleInstance:SetLocked(true)
+	
+	ChassisHandler = nil
+	
+	return Vehicle, VehicleInstance
+end
+
+function AmbientSpawnsHandler:SpawnRandomOccupiedVehicle(VehicleName, PedGroup)
+	
+	local NPCs = {}
+	
+	local NPCSeating = {}
+	
+	
+	local VehicleInfo = VehicleList[VehicleName]
+	
+	PedGroup = VehicleInfo.Ambient.DriverPedGroup or PedGroup
+	
+	local MaxOccupants = VehicleInfo.Ambient.MaxAmbientOccupants
+	
+	local function SpawnAndRegisterNPC(SeatName)
+		local NPC = NPCHandler:SpawnNPCFromGroup(PedGroup, {CurrentBehavior = "Roaming"}, {}, {})
+
+		NPC.Parent = workspace.NPCs
+
+		table.insert(NPCs, NPC)
+
+		NPCSeating[NPC] = SeatName
+	end
+	
+	SpawnAndRegisterNPC("Seat1")
+	
+	for SeatName, SeatInfo in pairs(VehicleSeating.SeatLayouts[VehicleInfo.SeatLayout]) do
+		
+		if SeatName ~= "Seat1" then
+			if #NPCs >= MaxOccupants then
+				break
+			end
+
+			local RandomNumber = math.random()
+
+			if math.clamp(RandomNumber, 0, SeatInfo.AmbientSpawnChance) == RandomNumber then
+				local NPC = NPCHandler:SpawnNPCFromGroup(PedGroup, {CurrentBehavior = "Roaming"}, {}, {})
+
+				NPC.Parent = workspace.NPCs
+
+				table.insert(NPCs, NPC)
+
+				NPCSeating[NPC] = SeatName
+			end
+		end
+	end
+	
+	task.wait(.5)
+	
+	local Vehicle, VehicleInstance = VehicleHandler:SpawnVehicle(VehicleName)
+	
+	local PaintColors = VehicleInfo.Ambient.SpawnColors
+	
+	VehicleInstance:PaintVehicle(PaintColors[math.random(1, #PaintColors)])
+	
+	VehicleInstance:SetDirtLevel(math.random())
+	
+	for NPC, SeatName in pairs(NPCSeating) do
+		VehicleInstance:PutIntoSeat(NPC, Vehicle.Seats[SeatName])
+	end
+	
+	NPCSeating = nil
+	
+	return Vehicle, VehicleInstance, NPCs
+end
+
+function AmbientSpawnsHandler:GetRandomParkingSpotInArea(Position, MinDistance, MaxDistance)
+	local function PointIsFarFromVehicles(ParkingPosition)
+		for _, Vehicle in pairs(workspace.Vehicles:GetChildren()) do
+			if Vehicle.PrimaryPart then
+				if (Vehicle.PrimaryPart.Position - ParkingPosition).Magnitude < 10 then
+					return false
+				end
+			end
+		end
+
+		return true
+	end
+	
+	local PossibleIndexes = {}
+	
+	for Index, Parking in pairs(WaypointsList.VehicleParkings) do
+		
+		local ParkingPosition = Parking.CFrame.Position
+		
+		local Distance = (Position - ParkingPosition).Magnitude
+		
+		if math.clamp(Distance, MinDistance, MaxDistance) == Distance and PointIsFarFromVehicles(ParkingPosition) then
+			table.insert(PossibleIndexes, Index)
+		end
+	end
+	
+	if #PossibleIndexes == 0 then
+		return
+	end
+	
+	return PossibleIndexes[math.random(1, #PossibleIndexes)]
+end
+
+function AmbientSpawnsHandler:GetRandomPointConnectedToPoint(WaypointIndex, MaxDistance, IsPrevious)
+	
+	local CurrentWaypointIndex = WaypointIndex
+	
+	local WaypointInfo = WaypointsList.VehiclePaths[WaypointIndex]
+
+	local CurrentWaypointInfo = WaypointInfo
+	
+	local function PointIsFarFromVehicles()
+		for _, Vehicle in pairs(workspace.Vehicles:GetChildren()) do
+			if Vehicle.PrimaryPart then
+				if (Vehicle.PrimaryPart.Position - CurrentWaypointInfo.Position).Magnitude < 30 then
+					return false
+				end
+			end
+		end
+		
+		--if #CurrentWaypointInfo.Occupants ~= 0 then
+		--	return false
+		--end
+
+		--for _, PreviousWaypointIndex in pairs(CurrentWaypointInfo.PreviousPoints) do
+		--	local PreviousWaypointInfo = WaypointsList.VehiclePaths[PreviousWaypointIndex]
+
+		--	if (PreviousWaypointInfo.Position - CurrentWaypointInfo.Position).Magnitude < 20 then
+		--		if #PreviousWaypointInfo.Occupants ~= 0 then
+		--			return false
+		--		end
+		--	end
+		--end
+
+		--for _, NextWaypointIndex in pairs(CurrentWaypointInfo.NextPoints) do
+		--	local NextWaypointInfo = WaypointsList.VehiclePaths[NextWaypointIndex]
+
+		--	if (NextWaypointInfo.Position - CurrentWaypointInfo.Position).Magnitude < 20 then
+		--		if #NextWaypointInfo.Occupants ~= 0 then
+		--			return false
+		--		end
+		--	end
+		--end
+
+		--return true
+		
+		return true
+	end
+	
+	repeat
+		
+		CurrentWaypointIndex = IsPrevious and CurrentWaypointInfo.PreviousPoints[math.random(1, #CurrentWaypointInfo.PreviousPoints)] or CurrentWaypointInfo.NextPoints[math.random(1, #CurrentWaypointInfo.NextPoints)]	
+		
+		CurrentWaypointInfo = WaypointsList.VehiclePaths[CurrentWaypointIndex]
+		
+	until (WaypointInfo.Position - CurrentWaypointInfo.Position).Magnitude > MaxDistance and PointIsFarFromVehicles()
+	
+	return CurrentWaypointIndex
+end
+
+function AmbientSpawnsHandler:SpawnOccupiedVehicleWithPedGroups(VehicleName, NPCTable)
+	
+	local NPCs = {}
+	
+	local PedInfos = {}
+	
+	for _, PedInfo in pairs(NPCTable) do
+		local NPC = NPCHandler:SpawnNPCFromGroup(PedInfo.PedGroup, {CurrentBehavior = "Combat"}, PedInfo.ExtraAssets, PedInfo.ModelInfo)
+		
+		NPC.Parent = workspace.NPCs
+		
+		table.insert(NPCs, NPC)
+
+		PedInfos[NPC] = PedInfo
+	end
+	
+	task.wait(0.5)
+	
+	local Vehicle, VehicleInstance = VehicleHandler:SpawnVehicle(VehicleName)
+	
+	Vehicle.InfoFolder.NoDespawn.Value = true
+	
+	for NPC, PedInfo in pairs(PedInfos) do
+		
+		local SeatName = "Seat" .. PedInfo.Seat
+		
+		local Seat = nil
+		
+		for _, PotentialSeat in pairs(Vehicle.Seats:GetChildren()) do
+			if PotentialSeat.Name == SeatName and not PotentialSeat.Occupant then
+				Seat = PotentialSeat
+				break
+			end
+		end
+		
+		VehicleInstance:PutIntoSeat(NPC, Seat)
+	end
+	
+	Vehicle.InfoFolder.NoDespawn.Value = false
+	
+	return Vehicle, VehicleInstance, NPCs
+end
+
+return AmbientSpawnsHandler
