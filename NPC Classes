@@ -1,0 +1,2521 @@
+local NPCClass = {}
+
+NPCClass.__index = NPCClass
+
+NPCClass.NPCCharacters = {}
+
+local WaypointHandler = require(game.ServerScriptService.WaypointHandler)
+
+local VehicleSeating = require(game.ReplicatedStorage.VehicleSeating)
+
+local VehicleList = require(game.ReplicatedStorage.VehicleList)
+
+local Events = game.ReplicatedStorage.Events
+
+local WaypointsList = require(game.ServerScriptService.WaypointsList)
+
+local VehicleHandler = require(game.ServerScriptService.VehicleHandler)
+
+local VehicleClass = require(game.ServerScriptService.VehicleClass)
+
+local TweenService = game:GetService("TweenService")
+
+local ItemList = require(game.ReplicatedStorage.ItemList)
+
+local EquipmentHandler = require(game.ServerScriptService.EquipmentHandler)
+
+local AvatarModule = require(game.ServerScriptService.AvatarModule)
+
+local PedModels = require(game.ReplicatedStorage.PedModels)
+
+local AnimationHandler = require(game.ReplicatedStorage.AnimationHandler)
+
+local AnimationExtras = require(game.ReplicatedStorage.AnimationExtras)
+
+local GunModule = require(game.ServerScriptService.GunModule)
+
+local ClientGunModule = require(game.ReplicatedStorage.GunModule)
+
+local CollectionService = game:GetService("CollectionService")
+
+local PathfindingService = game:GetService("PathfindingService")
+
+local GeneralFunctions = require(game.ReplicatedStorage.GeneralFunctions)
+
+local CombatInfos = require(game.ServerScriptService.CombatInfos)
+
+local DaylightTimes = {
+	Day = 378,
+	Night = 1050,
+}
+
+local OpenFireFearThreshold = 40
+
+local DisabledHumanoidStates = {
+	Enum.HumanoidStateType.Ragdoll,
+	Enum.HumanoidStateType.Jumping,
+	Enum.HumanoidStateType.Climbing,
+	Enum.HumanoidStateType.Swimming,
+	Enum.HumanoidStateType.FallingDown,
+	Enum.HumanoidStateType.Freefall,
+	Enum.HumanoidStateType.Landed,
+	Enum.HumanoidStateType.Flying,
+	Enum.HumanoidStateType.PlatformStanding
+}
+
+local HonkPatterns = {
+	{"P", 1.4, "S"},
+	{"P", 0.3, "S", 0.05, "P", 0.3, "S", 0.05, "P", 1, "S"},
+	{"P", 1, "S", 0.1, "P", 1.4, "S"},
+}
+
+local WalkSpeeds = require(game.ReplicatedStorage.WalkSpeeds)
+
+local Params = RaycastParams.new()
+
+Params.FilterType = Enum.RaycastFilterType.Include
+
+Params.FilterDescendantsInstances = {workspace.Buildings, workspace.TerrainParts, workspace.MapParts, workspace.Props}
+
+
+function NPCClass.new(Character)
+	local self = setmetatable({},NPCClass)
+	
+	local PedInfo = PedModels[Character.Name]
+	
+	local CombatInfo = CombatInfos[PedInfo.CombatInfo]
+	
+	for _, Value in pairs(game.ServerStorage.NPCValues:GetChildren()) do
+		if Value.Value == Character then
+			self.NPCValue = Value
+			break
+		end
+	end
+
+	-- References
+
+	self.Character = Character
+	
+	self.Interactor = Character.Interactor
+	
+	self.RotForce = Character.PrimaryPart.RotForce
+	
+	self.PrimaryPart = Character.PrimaryPart
+
+	self.Humanoid = Character.Humanoid
+
+	self.PropertyFolder = Character.Properties
+
+	self.CToolInfos = {
+		Tool = nil,
+
+		ItemInfo = nil,
+
+		ToolType = nil,
+
+		AnimationList = {},
+
+		ReloadConnection = nil,
+
+		AncestryConnection = nil,
+	}
+	
+	self.BurstDebounce = false
+	
+	self.CurrentSeatPart = nil
+	
+	self.AimingPart = nil
+	
+	self.AimingLoop = coroutine.create(
+		function()
+			while true do
+				wait(0.1)
+				
+				if self.AimingPart then
+					self.RotForce.CFrame = CFrame.lookAt(self.PrimaryPart.Position, self.AimingPart.Position)
+				end
+			end
+		end
+	)
+
+	-- AI
+	
+	self.QueuedTask = nil
+
+	self.Task = "Idling"
+	
+	self.FireTries = 0
+
+	self.WalkIndex = 0
+	
+	self.DriveIndex = 0
+
+	self.IsMoving = false
+	
+	self.IsDriving = false
+
+	self.CurrentThread = nil
+
+	self.ThreadClosing = false
+
+	self.PathInfo = PathfindingService:CreatePath({
+		AgentHeight = 4.2,
+		AgentCanJump = false,
+		AgentRadius = 1,
+		Costs = {
+			PathIgnore = math.huge,
+			Asphalt = 0.5,
+		},
+	})
+	
+	self.VehiclePathInfo = PathfindingService:CreatePath({
+		AgentHeight = 8,
+		AgentCanJump = false,
+		AgentRadius = 6,
+		Costs = {
+			PathIgnore = math.huge,
+			Concrete = 50,
+			Cobblestone = 100,
+			Ground = 200,
+		},
+		WaypointSpacing = 20,
+	})
+	
+	self.CurrentVehicleProperties = {
+		Braking = 0,
+		Acceleration = 0,
+		SteerRate = 0,
+	}
+
+	-- Target
+
+	self.Targets = {}
+
+	self.CurrentTarget = nil
+
+	-- Combat
+	
+	self.Fear = 100
+	
+	self.CombatFlags = CombatInfo.CombatFlags
+
+	self.CurrentCover = nil
+
+	self.IgnoredCover = {}
+
+	self.Suppressed = false
+	
+	self.SuppressedIndex = 0
+	
+	self.DamageDebounce = false
+	
+	self.DamagedIndex = 0
+	
+	self.IsAiming = false
+	
+	self.AimAnimationsActive = false
+	
+	self.IsAimingAtTarget = false
+	
+	self.IsCrouching = false
+	
+	self.Accuracy = CombatInfo.Accuracy
+	
+	-- Vehicle
+	
+	self.LastVehicle = nil
+	
+	self.CurrentVehicle = nil
+	
+	self.ChassisHandler = nil
+	--
+	self.CurrentVehicleWaypointIndex = nil
+	
+	self.CurrentVehicleWaypointInfo = nil
+	
+	self.IsVehicleDriver = false
+	
+	self.LightToggleDelay = math.random(-15, 15)
+	
+	for _, StateType in pairs(DisabledHumanoidStates) do
+		Character.Humanoid:SetStateEnabled(StateType, false)
+	end
+	
+	NPCClass.NPCCharacters[Character] = self
+	
+	local DestroyConnection = nil
+	
+	DestroyConnection = Character.Destroying:Connect(function()
+		DestroyConnection:Disconnect()
+		self:Destroy()
+	end)
+
+	return self
+end
+
+local VehicleWaypointTags = {
+	IndicatorROn = function(self, WaypointIndex)
+		Events.SetVehicleLightsEnabled:Fire(self.CurrentVehicle, "Right", true)
+	end,
+	IndicatorsOff = function(self, WaypointIndex)
+		Events.SetVehicleLightsEnabled:Fire(self.CurrentVehicle, "Right", false)
+		Events.SetVehicleLightsEnabled:Fire(self.CurrentVehicle, "Left", false)
+	end,
+	IndicatorLOn = function(self, WaypointIndex)
+		Events.SetVehicleLightsEnabled:Fire(self.CurrentVehicle, "Left", true)
+	end,
+	Stop = function(self, Waypoint)
+		
+		local WaypointInfo = WaypointsList.VehiclePaths[Waypoint]
+		
+		self:MoveVehicleToPosition(self.CurrentVehicleWaypointInfo.Position, 10)
+		
+		self.ChassisHandler:SetAcceleration(0)
+		
+		self.ChassisHandler:SetBraking(1)
+		
+		local function YieldWaypointsFree()
+			
+			if not WaypointInfo.PointsToYield then
+				return true
+			end
+			
+			for _, YieldPointIndex in pairs(WaypointInfo.PointsToYield) do
+				if #WaypointsList.VehiclePaths[YieldPointIndex].Occupants ~= 0 then
+					return false
+				end
+			end
+			
+			return true
+		end
+		
+		repeat
+			task.wait(0.5)
+		until YieldWaypointsFree()
+		
+		self.ChassisHandler:SetBraking(0)
+	end,
+}
+
+local Tasks = {
+	FootRangedCombat = function(self)
+		
+		local Tool = self:FindToolOfType("Ranged", 5)
+		
+		if Tool then
+			self:SetToolEquipped(Tool)
+		end
+		
+		local CanFlank = self:HasCombatFlag("CanFlank")
+
+		while true do
+			
+			if not self.Suppressed then
+				self:SetClosestEnemy()
+			end
+
+			task.wait(0.2)
+			
+			self.Fear = math.clamp(self.Fear - 2, 0, 100)
+
+			local Cover = self.CurrentCover
+
+			if self.ThreadClosing then
+				return
+			end
+
+			if not self.CurrentTarget or self.CurrentTarget.Parent == nil or self.DamageDebounce then
+				continue
+			end
+
+			if not Cover or Cover.Parent == nil or not self:IsSafeCover(Cover) or Cover.Parent.Velocity.Magnitude > 1 then
+
+				AnimationHandler:Stop("Suppressed", self.Humanoid, true)
+
+				self:SetCover(nil, false)
+
+				local Result = workspace:Raycast(self.Character.Head.Position, self.CurrentTarget.Head.Position - self.Character.Head.Position, Params)
+
+				if Result then
+					self:ToggleAiming(false)
+				else
+					self:ToggleAimAnimations(true)
+					self:ToggleAiming(true, self.CurrentTarget.Head, true)
+				end
+
+				repeat
+
+					task.wait(0.1)
+
+					if self.ThreadClosing then
+						self:SetClosestEnemy()
+						return
+					end
+
+					local Reached = false
+
+					if self.CToolInfos.Tool then
+						
+						local WeaponHasAmmo = self.CToolInfos.Tool.InfoFolder.Ammo.Value > 0
+						
+						Cover = WeaponHasAmmo and self:FindCoverAttachment(self.Fear / 20) or self:FindSafestCoverAttachment()
+
+						if Cover then
+							Reached = self:SetAndWalkToCover(Cover, WeaponHasAmmo)
+						end
+					end
+
+
+				until Reached or Cover == nil
+
+				if not Cover then
+					self:PushTarget()
+				end
+
+				self.IgnoredCover = {}
+
+
+			end
+
+			if Cover then
+
+				if self.CToolInfos.Tool.InfoFolder.Ammo.Value <= 0 then
+					self:Reload()
+				end
+				
+				if self.CurrentTarget then
+					if not self.Suppressed then
+						
+						AnimationHandler:Stop("Suppressed", self.Humanoid, true)
+						
+						if math.random(0, 7) == 0 then
+							
+							local UseFlank = CanFlank and math.random(1, 4) == 1 and self.Fear < 70
+							
+							local IsIdealCoverByAttribute = nil
+							
+							if UseFlank then
+								IsIdealCoverByAttribute = self:IsFlankCover(Cover)
+							else
+								IsIdealCoverByAttribute = self:IsIdealCover(Cover, 5)
+							end
+							
+							if IsIdealCoverByAttribute then
+
+								self:ToggleCrouch(false)
+								self:ToggleCrouchAnimations(false)
+
+								self:FireOutOfCover()
+
+								if Cover.Name == "LowCover" then
+									self:ToggleCrouch(true)
+									
+									task.wait(0.5)
+									
+									self:ToggleCrouchAnimations(true)
+								end
+								
+								self.Fear = math.clamp(self.Fear - 3, 0, 100)
+							else
+								local NewCover = (UseFlank and self:FindFlankCoverAttachment() or self:FindCoverAttachment(5))
+
+								if NewCover and NewCover ~= self.CurrentCover then
+
+									self:SetCover(nil, false)
+
+									self:ToggleAiming(false)
+
+									self:SetAndWalkToCover(NewCover)
+								else
+
+									self:SetCover(nil, false)
+
+									self:ToggleAiming(false)
+									
+									self:PushTarget()
+								end
+
+							end
+						end
+						
+						
+					else
+						AnimationHandler:Play("Suppressed", self.Humanoid, nil, true)
+
+						self.Fear = math.clamp(self.Fear + 4, 0, 100)
+					end
+				end
+
+				
+			end
+
+			--self:FireBurst(5, 0)
+		end
+	end,
+	FootMeleeCombat = function(self)
+		self:FireBurst(4)
+	end,
+	FootRoaming = function(self)
+
+	end,
+	BleedingOut = function(self)
+		
+		self:EndWalk()
+		
+		self:SetWalkSpeed(0)
+		
+		repeat
+			task.wait(0.1)
+		until self.PropertyFolder.Ragdolled.Value == false or self.Humanoid.Health <= 0
+		
+		AnimationHandler:Play("BleedingOut", self.Humanoid, 2, true)
+		
+		repeat
+			task.wait(1)
+			
+			self.Humanoid:TakeDamage(3)
+		until self.Humanoid.Health <= 0
+		
+		self:ChangeMode("Dead")
+	end,
+	VehicleRoaming = function(self)
+		
+		self:OnSpawnedInVehicle()
+		
+		self.ChassisHandler:SetParkingBrakes(false)
+		
+		self.VehicleInstance:ToggleSiren(nil, false)
+		
+		if not self.CurrentVehicleWaypointIndex then
+
+			self:FindAndSetVehicleWaypoint()
+		end
+		
+		while true do
+			
+			task.wait()
+
+			local HasReached = self:MoveVehicleToPosition(self.CurrentVehicleWaypointInfo.Position, self.CurrentVehicleWaypointInfo.MaxSpeed)
+			
+			if self.ThreadClosing then
+				return
+			end
+			
+			if self.CurrentVehicle then
+				
+				self:ToggleVehicleLightsAuto()
+				
+				if HasReached then
+					local NextPointIndexes = WaypointsList.VehiclePaths[self.CurrentVehicleWaypointIndex].NextPoints
+
+					if #NextPointIndexes == 0 then
+						self.ChassisHandler:SetAcceleration(0)
+
+						self.ChassisHandler:SetBraking(1)
+					else
+						local NextWaypoint = NextPointIndexes[math.random(1, #NextPointIndexes)]
+
+						self:SetCurrentVehicleWaypoint(NextWaypoint)
+					end
+
+					for _, Tag in pairs(self.CurrentVehicleWaypointInfo.Tags) do
+						VehicleWaypointTags[Tag](self, self.CurrentVehicleWaypointIndex)
+					end
+				else
+					local RelativePosition = self.CurrentVehicle.Chassis.CarArea.CFrame:PointToObjectSpace(self.CurrentVehicleWaypointInfo.Position)
+
+					local SteerFactor = RelativePosition.X / -(self.CurrentVehicle.PrimaryPart.Position - self.CurrentVehicleWaypointInfo.Position).Magnitude
+
+					self:ReverseVehicle(-SteerFactor)
+				end
+			end
+		end
+	end,
+	EnteringVehicleRoam = function(self)
+		
+		self:SetWalkSpeed(WalkSpeeds.Walk)
+		
+		local LastVehicle = self.LastVehicle
+		
+		if LastVehicle then
+			self:WalkToPosition(LastVehicle.Seats.Seat1.ExitPosition.WorldPosition + Vector3.new(0, -2, 0), true)
+
+			local VehicleInstance = VehicleClass.GetVehicleClass(LastVehicle)
+
+			VehicleInstance:EnterVehicle(self.Character, LastVehicle.Seats.Seat1)
+			
+			task.wait(1)
+			
+			task.spawn(function()
+				self:ChangeMode("VehicleRoaming")
+			end)
+		end
+	end,
+	ExitingVehicleCombat = function(self)
+		
+		self:SetToolEquipped(nil)
+		
+		self.VehicleInstance:ExitVehicle(self.Character, true)
+		
+		task.spawn(function()
+			self:ChangeMode("FootRangedCombat")
+		end)
+	end,
+	StoppingVehicleCombat = function(self)
+		
+		if self.ChassisHandler then
+			self.ChassisHandler:SetSteer(math.random(-1, 1))
+
+			self:StopVehicle()
+		end
+
+		task.spawn(function()
+			self:ChangeMode("ExitingVehicleCombat")
+		end)
+	end,
+	InvestigateTarget = function(self)
+		
+		self:SetWalkSpeed(WalkSpeeds.Sprint)
+		
+		if self.CurrentTarget then
+			self:WalkToPosition(self.CurrentTarget.PrimaryPart.Position, true, 2)
+			
+			task.wait(3)
+		end
+		
+		task.spawn(function()
+			self:ChangeMode("EnteringVehicleRoam")
+		end)
+	end,
+	ExitingVehicleInvestigateTarget = function(self)
+
+		self:SetToolEquipped(nil)
+
+		self.VehicleInstance:ExitVehicle(self.Character, true)
+		
+		task.spawn(function()
+			self:ChangeMode("InvestigateTarget")
+		end)
+		
+	end,
+	StopHitPlayerWithCar = function(self)
+		
+		self:StopVehicle()
+		
+		task.spawn(function()
+			self:ChangeMode("ExitingVehicleInvestigateTarget")
+		end)
+	end,
+	Fleeing = function(self)
+
+	end,
+	VehicleFleeing = function(self)
+
+	end,
+	VehicleDrivingToFootTarget = function(self)
+		
+		self.VehicleInstance:ToggleSiren(nil, true)
+		
+		local HasReached = nil
+		
+		self:SetClosestEnemy()
+		
+		local ViewParams = RaycastParams.new()
+		
+		ViewParams.FilterType = Enum.RaycastFilterType.Include
+		
+		local TargetToDriveTo = self.CurrentTarget
+		
+		local LastTargetPosition = nil
+		
+		task.spawn(function()
+			while HasReached == nil do
+				
+				task.wait(1)
+				
+				self:ToggleVehicleLightsAuto()
+				
+				if self.ThreadClosing then
+					return
+				end
+				
+				self:SetClosestEnemy()
+				
+				if not self.CurrentTarget then
+					
+					self:ChangeMode("VehicleRoaming")
+					
+					return
+				end
+				
+				if self.Suppressed then
+					
+					task.spawn(function()
+						self:ChangeMode("StoppingVehicleCombat")
+					end)
+					return
+				end
+				
+				if TargetToDriveTo.Parent == nil then
+					TargetToDriveTo = self.CurrentTarget
+				end
+				
+				if not LastTargetPosition then
+					LastTargetPosition = TargetToDriveTo.PrimaryPart.Position
+					
+					task.spawn(function()
+						HasReached = self:DriveToWaypoint(WaypointHandler:GetRandomWaypointInRange(LastTargetPosition, 10, 50, true), true, 0, "Rush")
+					end)
+				elseif (TargetToDriveTo.PrimaryPart.Position - LastTargetPosition).Magnitude > 80 then
+					
+					LastTargetPosition = TargetToDriveTo.PrimaryPart.Position
+					
+					self:EndDrive()
+					
+					if self.IsDriving then
+						repeat
+							task.wait()
+						until HasReached ~= nil
+					end
+					
+					HasReached = nil
+					
+					task.spawn(function()
+						HasReached = self:DriveToWaypoint(WaypointHandler:GetRandomWaypointInRange(LastTargetPosition, 10, 50, true), true, 0, "Rush")
+					end)
+				end
+				
+				ViewParams.FilterDescendantsInstances = {self.CurrentTarget, workspace.Props, workspace.Buildings}
+				
+				local DirectionVector = (self.CurrentTarget.Head.Position - self.Character.Head.Position)
+				
+				local TargetDistance = DirectionVector.Magnitude
+				
+				local Result = workspace:Raycast(self.Character.Head.Position, DirectionVector.Unit * math.clamp(TargetDistance, 0, 100 + self.PrimaryPart.Velocity.Magnitude), ViewParams)
+				
+				if Result and Result.Instance:IsDescendantOf(self.CurrentTarget) then
+					
+					task.spawn(function()
+						self:ChangeMode("StoppingVehicleCombat")
+					end)
+					return
+				end
+			end
+			
+			task.spawn(function()
+				self:ChangeMode("StoppingVehicleCombat")
+			end)
+		end)
+	end,
+	PassengerWaitDrivingToFootTarget = function(self)
+		
+		local ViewParams = RaycastParams.new()
+
+		ViewParams.FilterType = Enum.RaycastFilterType.Include
+		
+		if self.CurrentVehicle then
+			local VehicleInfo = VehicleList[self.CurrentVehicle.Name]
+
+			local SeatingInfo = VehicleSeating.SeatLayouts[VehicleInfo.SeatLayout][self.CurrentSeatPart.Name]
+
+			while self.CurrentVehicle and self.CurrentVehicle.Seats.Seat1.Occupant do
+
+				if self.ThreadClosing then
+					return
+				end
+
+				self:SetClosestEnemy()
+
+				if self.Suppressed or SeatingInfo.AlwaysFireAtEnemies then
+
+					local DirectionVector = (self.CurrentTarget.Head.Position - self.Character.Head.Position)
+
+					local TargetDistance = DirectionVector.Magnitude
+
+					ViewParams.FilterDescendantsInstances = {self.CurrentTarget, workspace.Props, workspace.Buildings}
+
+					local Result = workspace:Raycast(self.Character.Head.Position, DirectionVector.Unit * math.clamp(TargetDistance, 0, 250), ViewParams)
+
+					if Result and Result.Instance:IsDescendantOf(self.CurrentTarget) then
+						if not self:HasToolOfTypeEquipped("Ranged") then
+							local Tool = self:FindToolOfType("Ranged", 1)
+
+							if Tool then
+								self:SetToolEquipped(Tool)
+							end
+						end
+
+						if self.CToolInfos.Tool then
+
+							if self.CToolInfos.Tool.InfoFolder.Ammo.Value <= 0 then
+								if self:HasCombatFlag("CanReloadWhileWalking") then
+									self:Reload()
+								end
+							end
+
+							self:ToggleAimAnimations(true)
+
+							self:FireBurst(self:CalculateBurstCount())
+						end
+					end
+				end
+
+				task.wait(0.2)
+			end
+		end
+		
+		
+		spawn(function()
+			self:ChangeMode("ExitingVehicleCombat")
+		end)
+	end,
+	VehicleCombat = function(self)
+
+	end,
+	Arresting = function(self)
+
+	end,
+	Idling = function(self)
+
+	end,
+	Dead = function(self)
+		self:ToggleAiming(false, nil)
+
+		AvatarModule:ChangeFace(self.Character, "Dead")
+
+		EquipmentHandler:DropTool(self.CToolInfos.Tool)
+		
+		delay(10, function()
+			self.Character:Destroy()
+		end)
+	end,
+}
+
+function NPCClass:SetWalkSpeed(WalkSpeed)
+	
+	if self.DamageDebounce then
+		WalkSpeed = 0
+	end
+	
+	self.Humanoid.WalkSpeed = WalkSpeed
+end
+
+function NPCClass:HasCombatFlag(Flag)
+	return table.find(self.CombatFlags, Flag) ~= nil
+end
+
+function NPCClass:ToggleCrouchAnimations(IsCrouching)
+	if IsCrouching then
+		AnimationHandler:Play("Crouch", self.Humanoid, nil, true, 0)
+	else
+		AnimationHandler:Stop("Crouch", self.Humanoid, true, 0)
+	end
+end
+
+function NPCClass:ToggleCrouch(IsCrouching)
+	self.IsCrouching = IsCrouching
+	
+	self.PropertyFolder.Crouching.Value = IsCrouching
+	
+	AnimationHandler:UpdateMovementAnimations(self.Humanoid, nil, IsCrouching, self.AimAnimationsActive, self.Humanoid.Sit)
+end
+
+function NPCClass:ToggleAimAnimations(IsAiming)
+	
+	self.AimAnimationsActive = IsAiming
+	
+	self.PropertyFolder.IsAiming.Value = IsAiming
+	
+	AnimationHandler:UpdateMovementAnimations(self.Humanoid, nil, self.IsCrouching, IsAiming, self.Humanoid.Sit)
+	
+	AnimationHandler:Play(IsAiming and self.CToolInfos.AnimationList.Hold or self.CToolInfos.AnimationList.Holster, self.Humanoid, nil, true)
+	AnimationHandler:Stop(IsAiming and self.CToolInfos.AnimationList.Holster or self.CToolInfos.AnimationList.Hold, self.Humanoid, true)
+end
+
+function NPCClass:ReverseVehicle(SteerRate)
+	self.ChassisHandler:SetBraking(1)
+	
+	self.ChassisHandler:SetAcceleration(0)
+	
+	task.wait(1)
+	
+	if not self.ChassisHandler or self.ThreadClosing then
+		return
+	end
+	
+	self.ChassisHandler:SetBraking(0)
+	
+	self.ChassisHandler:SetSteer(SteerRate, nil, true)
+	
+	self.ChassisHandler:SetAcceleration(1, -10)
+	
+	task.wait(3)
+	
+	if not self.ChassisHandler then
+		return
+	end
+	
+	self.ChassisHandler:SetAcceleration(0)
+end
+
+function NPCClass:CalculateWaypointPath(StartWaypointIndex, GoalWaypointIndex)
+
+	local function Heuristic(WaypointIndex1, WaypointIndex2)
+		return (WaypointsList.VehiclePaths[WaypointIndex1].Position - WaypointsList.VehiclePaths[WaypointIndex2].Position).Magnitude
+	end
+
+	local ClosedWaypoints = {}
+	local OpenWaypoints = {}
+
+	local WaypointInfo = {}
+
+	OpenWaypoints[StartWaypointIndex] = true
+
+	local G = 0
+
+	local H = Heuristic(StartWaypointIndex, GoalWaypointIndex)
+
+	WaypointInfo[StartWaypointIndex] = {G = G, H = H, F = G + H, CameFrom = nil}
+	--start is the start so it has a g of 0
+
+	local function GetOpenWaypointCount()
+		local NewOpenCount = 0
+
+		for Open, Value in pairs(OpenWaypoints) do
+			NewOpenCount += 1
+		end
+
+		return NewOpenCount
+	end
+
+
+	local OpenWaypointCount = GetOpenWaypointCount()
+
+	while OpenWaypointCount > 0 do
+		local current = nil
+
+		local LowestF = math.huge
+
+		for Open, _ in pairs(OpenWaypoints) do
+
+			if WaypointInfo[Open].F < LowestF then
+				LowestF = WaypointInfo[Open].F
+
+				current = Open
+			end
+		end
+
+		if current == GoalWaypointIndex then
+
+			local Waypoints = {}
+
+			while WaypointInfo[current].CameFrom ~= nil do
+				table.insert(Waypoints, current)
+
+				current = WaypointInfo[current].CameFrom
+			end
+
+			for i = 1, math.floor(#Waypoints/2) do
+				local j = #Waypoints - i + 1
+				Waypoints[i], Waypoints[j] = Waypoints[j], Waypoints[i]
+			end
+
+			return Waypoints
+		end
+		ClosedWaypoints[current] = true
+		OpenWaypoints[current] = nil
+
+		for _, neighbor in ipairs(WaypointsList.VehiclePaths[current].NextPoints) do 
+
+			if not ClosedWaypoints[neighbor] and not OpenWaypoints[neighbor] then
+
+				local G = WaypointInfo[current].G + Heuristic(current, neighbor)
+
+				local H = Heuristic(neighbor, GoalWaypointIndex)
+
+				WaypointInfo[neighbor] = {G = G, H = H, F = G + H, CameFrom = current}
+				--f=g+h
+				OpenWaypoints[neighbor] = true
+			end
+
+
+		end
+
+		OpenWaypointCount = GetOpenWaypointCount()
+	end
+end
+
+function NPCClass:ToggleAiming(IsAiming, AimingPart, IsAimingAtTarget)
+	
+	if IsAiming and self.PropertyFolder.Ragdolled.Value then
+		return
+	end
+	
+	if IsAiming then
+		if coroutine.status(self.AimingLoop) ~= "running" then
+			coroutine.resume(self.AimingLoop)
+		end
+	else
+		if coroutine.status(self.AimingLoop) == "running" then
+			coroutine.close()
+		end
+	end
+	
+	self.AimingPart = AimingPart
+	
+	self.IsAiming = IsAiming
+	
+	self.IsAimingAtTarget = IsAimingAtTarget == true
+	
+	self.Humanoid.AutoRotate = not IsAiming
+	
+	self.RotForce.Enabled = IsAiming
+end
+
+function NPCClass:CalculateBurstCount()
+
+	if self.CToolInfos.Tool.Parent == nil or self.CurrentTarget == nil then
+		return
+	end
+	
+	local MaxAmmo = self.CToolInfos.ItemInfo.TypeProperties.MaxAmmo
+	
+	local BurstAmounts = self.CToolInfos.ItemInfo.TypeProperties.AI.BurstAmounts
+
+	return math.clamp(math.random(1, ((self.PrimaryPart.Position - self.CurrentTarget.PrimaryPart.Position).Magnitude < 50 and BurstAmounts.Near or BurstAmounts.Far)), 1, math.clamp(self.CToolInfos.Tool.InfoFolder.Ammo.Value, 1, MaxAmmo))
+end
+
+function NPCClass:SetAndWalkToCover(Cover, EndWhenWeaponEmpty)
+	
+	self:SetCover(nil, false)
+	
+	self:SetCover(Cover, true)
+
+	local Reached = nil
+	
+	local FireAttachmentWorldPosition = Cover.WorldCFrame:PointToWorldSpace(Cover.FirePosition.Value)
+
+	spawn(function()
+
+		while Reached == nil do
+			
+			if self.CToolInfos.Tool.InfoFolder.Ammo.Value <= 0 then
+				if self:HasCombatFlag("CanReloadWhileWalking") then
+					self:Reload()
+				else
+					if EndWhenWeaponEmpty then
+						self:EndWalk()
+					end
+					
+					break
+				end
+			end
+			
+			if not self.Suppressed then
+				self:SetClosestEnemy()
+			end
+
+			if Reached ~= nil then
+				return
+			end
+
+			if self.CurrentTarget and self.CurrentTarget.Parent ~= nil then
+				
+				local PositionDifference = self.CurrentTarget.Head.Position - self.Character.Head.Position
+				
+				if PositionDifference.Magnitude < 30 or math.random(1, 3) == 1 or self.Suppressed then
+					
+					local Distance = PositionDifference.Magnitude
+					
+					local GunMaxRange = self.CToolInfos.ItemInfo.TypeProperties.Range.MaxRange
+					
+					if Distance < GunMaxRange then
+						local Result = workspace:Raycast(self.Character.Head.Position, PositionDifference.Unit * math.clamp(Distance, 0, GunMaxRange), Params)
+
+						if not Result or (Result.Position - self.CurrentTarget.Head.Position).Magnitude < 5 then
+							
+							self:SetWalkSpeed(WalkSpeeds.Run)
+
+							if not self:IsSafeCover(Cover) then
+								self:EndWalk()
+								return
+							end
+
+							local WasAiming = self.IsAiming
+
+							self:ToggleAiming(true, self.CurrentTarget.Head, true)
+
+							self:ToggleAimAnimations(true)
+
+							if not WasAiming then
+								wait(0.3)
+
+								if Reached ~= nil then
+									return
+								end
+							end
+
+							self:FireBurst(self:CalculateBurstCount())
+						end
+					end
+				end
+				
+				
+			end
+			
+			task.wait(0.6)
+		end
+	end)
+
+	self:SetWalkSpeed(WalkSpeeds.Sprint)
+	
+	self:ToggleAiming(false)
+	
+	self:ToggleAimAnimations(false)
+
+	Reached = self:WalkToPosition(FireAttachmentWorldPosition + Vector3.new(0, -2, 0), true)
+
+	if not Reached then
+
+		table.insert(self.IgnoredCover, Cover)
+
+		Cover = nil
+
+		self:SetCover(Cover, false)
+	else
+		
+		repeat
+			task.wait(0.1)
+		until self.BurstDebounce == false
+		
+		local VectorToCover = (Cover.WorldPosition - self.PrimaryPart.Position).Unit
+
+		self.Humanoid:MoveTo(Cover.WorldPosition + VectorToCover)
+		
+		self:ToggleAimAnimations(false)
+		
+		self:ToggleAiming(true, {Position = Cover.WorldPosition + Cover.WorldCFrame.LookVector * 10}, false)
+		
+		if Cover.Name == "LowCover" then
+			
+			self:ToggleCrouch(true)
+			
+			task.wait(0.5)
+			
+			self:ToggleCrouchAnimations(true)
+		end
+	end
+	
+	return Reached
+end
+
+function NPCClass:PushTarget()
+	
+	local Reached = nil
+	
+	self:ToggleCrouch(false)
+	
+	self:ToggleCrouchAnimations(false)
+	
+	AnimationHandler:Stop("Suppressed", self.Humanoid, true)
+
+	spawn(function()
+		
+		local HadEyeContact = false
+		
+		task.wait(0.2)
+		
+		self:ToggleAiming(true, self.CurrentTarget.Head, true)
+
+		self:ToggleAimAnimations(true)
+		
+		while Reached == nil and HadEyeContact == false do
+			wait(1)
+
+			if Reached ~= nil then
+				return
+			end
+			
+			if self.CToolInfos.Tool.InfoFolder.Ammo.Value <= 0 then
+				self:Reload()
+			end
+
+			if self.CurrentTarget then
+				local Result = workspace:Raycast(self.Character.Head.Position, self.CurrentTarget.Head.Position - self.Character.Head.Position, Params)
+
+				if not Result then
+					
+					spawn(function()
+						HadEyeContact = true
+
+						self:FireBurst(self:CalculateBurstCount())
+					end)
+				end
+			end
+		end
+		
+		if Reached == nil then
+			self:EndWalk()
+		end
+	end)
+	
+	self:SetClosestEnemy()
+	
+	if not self.CurrentTarget then
+		Reached = false
+		return
+	end
+
+	Reached = self:WalkToPosition(self.CurrentTarget.PrimaryPart.Position, true, 2)
+	
+	repeat
+		task.wait(0.5)
+	until self.BurstDebounce == false
+end
+
+--------
+
+function NPCClass:EnableSuppression(ShooterCharacter)
+	self.SuppressedIndex += 1
+	
+	local CurrentIndex = self.SuppressedIndex
+	
+	self.Suppressed = true
+	
+	if self.CurrentTarget ~= ShooterCharacter then
+		
+		self.CurrentTarget = ShooterCharacter
+		
+		if self.IsAimingAtTarget then
+			self:ToggleAiming(true, self.CurrentTarget.Head, true)
+		end
+	end
+	
+	task.delay(2, function()
+		if self.SuppressedIndex == CurrentIndex then
+			self.Suppressed = false
+		end
+	end)
+end
+
+function NPCClass:RemoveEnemy(Enemy)
+	local EnemyIndex = self.Targets[Enemy]
+	
+	if EnemyIndex then
+		self.Targets[Enemy] = nil
+		
+		self.Interactor:Fire("EnemyRemoved", Enemy)
+	end
+end
+
+function NPCClass:AddEnemy(Enemy)
+	
+	if not self.Targets[Enemy] then
+		self.Targets[Enemy] = {}
+
+		self.Interactor:Fire("EnemyAdded", Enemy)
+	end
+end
+
+function NPCClass:GetEnemies()
+	return self.Targets
+end
+
+function NPCClass:ToggleVehicleLightsAuto()
+	if not self.IsVehicleDriver then
+		return
+	end
+	
+	local AddedDaytime = game.ReplicatedStorage.Daytime.Value + self.LightToggleDelay
+	
+	local LightsOn = math.clamp(AddedDaytime, DaylightTimes.Day, DaylightTimes.Night) ~= AddedDaytime
+	
+	if LightsOn ~= self.VehicleLightsStatus then
+		self.VehicleLightsStatus = LightsOn
+		
+		Events.SetVehicleLightsEnabled:Fire(self.CurrentVehicle, "Head", LightsOn)
+	end
+end
+
+function NPCClass:OnSpawnedInVehicle()
+	local Vehicle = self.CurrentVehicle
+	
+	if not Vehicle then
+		return
+	end
+	
+	self.VehicleInstance:SetEngine(true)
+	
+	self:ToggleVehicleLightsAuto()
+end
+
+function NPCClass:RefreshVehicleInfo()
+	local SeatPart = self.Humanoid.SeatPart
+	
+	local Vehicle = nil
+	
+	local IsDriver = false
+	
+	local ChassisHandler = nil
+	
+	if SeatPart then
+		
+		Vehicle = GeneralFunctions:GetVehicleFromObject(SeatPart)
+		
+		if Vehicle then
+			IsDriver = SeatPart:IsA("VehicleSeat")
+			
+			if IsDriver then
+				ChassisHandler = require(Vehicle.Scripts.ChassisHandler)
+			end
+		end
+	end
+	
+	if Vehicle then
+		self.VehicleInstance = VehicleClass.GetVehicleClass(Vehicle)
+		
+		self.LastVehicle = Vehicle
+	end
+	
+	self.VehicleLightsStatus = nil
+	
+	self.CurrentSeatPart = SeatPart
+	
+	self.CurrentVehicle = Vehicle
+	
+	self.IsVehicleDriver = IsDriver
+	
+	self.ChassisHandler = ChassisHandler
+end
+
+function NPCClass:SetCurrentVehicleWaypoint(Index)
+	self.CurrentVehicleWaypointInfo = WaypointsList.VehiclePaths[Index]
+	
+	self.CurrentVehicleWaypointIndex = Index
+	
+	if self.VehicleInstance then
+		self.VehicleInstance:SetWaypointOccupation(Index)
+	end
+end
+
+function NPCClass:SetClosestEnemy()
+
+	local ClosestEnemy = nil
+
+	local ShortestEnemyDistance = math.huge
+
+	for Enemy, InfoTable in pairs(self.Targets) do
+		
+		if Enemy.Parent == nil or Enemy.Humanoid:GetState() == Enum.HumanoidStateType.Dead then
+			
+			self:RemoveEnemy(Enemy)
+			continue
+		end
+
+		local EnemyDistance = (Enemy.PrimaryPart.Position - self.PrimaryPart.Position).Magnitude
+
+		if EnemyDistance < ShortestEnemyDistance then
+			ClosestEnemy = Enemy
+
+			ShortestEnemyDistance = EnemyDistance
+		end
+	end
+
+	self.CurrentTarget = ClosestEnemy
+	
+	self.PropertyFolder.CurrentTarget.Value = ClosestEnemy
+
+	return ClosestEnemy
+end
+
+function NPCClass:Reload()
+	
+	if self.IsReloading then
+		return
+	end
+	
+	self.IsReloading = true
+	GunModule:ReloadGun({Character = self.Character}, self.CToolInfos.Tool)
+	self.IsReloading = false
+end
+
+
+function NPCClass:FireOutOfCover()
+
+	local CurrentCover = self.CurrentCover
+	
+	if not CurrentCover or CurrentCover.Parent == nil or self.BurstDebounce or not self.CurrentTarget or self.CurrentTarget.Parent == nil then
+		return
+	end
+
+	local FireAttachmentWorldPosition = CurrentCover.WorldCFrame:PointToWorldSpace(CurrentCover.FirePosition.Value)
+
+	--if not HasSeenCurrentEnemy then
+	--	return
+	--end
+	
+	self:ToggleAiming(true, self.CurrentTarget.Head, true)
+	
+	self:ToggleAimAnimations(true)
+	
+	self:SetWalkSpeed(WalkSpeeds.Run)
+
+	self.Humanoid:MoveTo(FireAttachmentWorldPosition)
+
+	--if CurrentCover.Name == "HighCover" then
+
+	--	Humanoid:MoveTo(CurrentCover.FirePosition.Value)
+	--else
+	--	Humanoid:MoveTo(CurrentCover.WorldPosition + CurrentCover.WorldCFrame.LookVector * 3)
+	--end
+	AnimationHandler:Play(self.CToolInfos.AnimationList.CoverAim, self.Humanoid, 0.3)
+	
+	task.wait(0.3)
+
+	if self.CToolInfos.Tool.Parent == nil then
+		return
+	end
+	
+	local BurstCount = nil
+	
+	if self:HasCombatFlag("CanSpam") and math.random(1, 5) == 1 then
+		BurstCount = self.CToolInfos.Tool.InfoFolder.Ammo.Value
+	else
+		BurstCount = self:CalculateBurstCount()
+	end
+	
+	local BurstCancelled = false
+	
+	local BurstAmount = math.random(0, 1)
+	
+	for Index = 1, BurstAmount do
+
+		self:FireBurst(BurstCount, 0.3)
+
+		if self.Suppressed or self.CToolInfos.Tool.InfoFolder.Ammo.Value <= 0 then
+			BurstCancelled = true
+			break
+		end
+
+		if (self.CurrentTarget.PrimaryPart.Position - self.PrimaryPart.Position).Magnitude > 20 then
+			if math.random(1, 3) == 1 then
+
+				task.wait(0.3)
+
+				AnimationHandler:Play("CombatAnimation"..math.random(1,3), self.Humanoid)
+
+				task.wait(0.7)
+			else
+				task.wait(math.random(1, 5) / 10)
+			end
+		end
+	end
+	
+	if not BurstCancelled then
+		self:FireBurst(BurstCount, 0.3, BurstAmount == 0 and 1.5 or 1)
+	end
+	
+	if CurrentCover.Parent == nil or not self.CurrentTarget or not self:IsSafeCover(CurrentCover) then
+		return
+	end
+	
+	AnimationHandler:Play(self.CToolInfos.AnimationList.CoverAim, self.Humanoid, _, _, _, true)
+	
+	self:ToggleAiming(true, {Position = CurrentCover.WorldPosition + CurrentCover.WorldCFrame.LookVector * 10}, false)
+	
+	self:ToggleAimAnimations(false)
+
+	local VectorToCover = (CurrentCover.WorldPosition - self.PrimaryPart.Position).Unit
+
+	self.Humanoid:MoveTo(CurrentCover.WorldPosition + VectorToCover)
+end
+
+function NPCClass:StopVehicle()
+	
+	if not self.CurrentVehicle then
+		return
+	end
+	
+	self.ChassisHandler:SetBraking(1)
+
+	self.ChassisHandler:SetAcceleration(0)
+
+	self.CurrentVehicleProperties.Braking = nil
+	self.CurrentVehicleProperties.BrakingAcceleration = nil
+
+	self.CurrentVehicleProperties.Braking = nil
+	self.CurrentVehicleProperties.TargetSpeed = nil
+
+	while self.CurrentVehicle.PrimaryPart.Velocity.Magnitude > 1 do
+		
+		if self.ThreadClosing then
+			return
+		end
+
+		task.wait()
+	end
+end
+
+function NPCClass:RefreshToolInfos()
+	local Tool = self.Character:FindFirstChildOfClass("Tool")
+	
+	local CToolInfos = self.CToolInfos
+	
+	CToolInfos.Tool = Tool
+
+	CToolInfos.ItemInfo = {}
+
+	if CToolInfos.ReloadConnection then
+		CToolInfos.ReloadConnection:Disconnect()
+		CToolInfos.ReloadConnection = nil
+	end
+
+	if CToolInfos.AncestryConnection then
+		CToolInfos.AncestryConnection:Disconnect()
+		CToolInfos.AncestryConnection = nil
+	end
+
+	for _, AnimationName in pairs(CToolInfos.AnimationList) do
+		AnimationHandler:Stop(AnimationName, self.Humanoid, true)
+	end
+
+	CToolInfos.AnimationList = {}
+
+	CToolInfos.ToolType = (Tool ~= nil and ItemList[Tool.Name].DataType) or nil
+
+	if Tool then
+
+		local ItemInfo = ItemList[Tool.Name]
+
+		for i, v in pairs(ItemInfo) do
+			CToolInfos.ItemInfo[i] = v
+		end
+
+		for Index, Value in pairs (CToolInfos.ItemInfo.AnimationList) do
+			CToolInfos.AnimationList[Index] = Value
+		end
+
+		for Type, _ in pairs(CToolInfos.ItemInfo.AnimationList) do
+
+			CToolInfos.AnimationList[Type] = AnimationExtras:GetGunAnim(self.Character, Tool.Name, Type)
+		end
+
+		local IdleAnimation = CToolInfos.AnimationList.Holster or CToolInfos.AnimationList.Hold
+
+		AnimationHandler:Play(CToolInfos.AnimationList.Hold, self.Humanoid, nil, true)
+
+		Tool.AncestryChanged:Connect(function()
+			if Tool.Parent ~= self.Character and Tool.Parent ~= self.NPCValue.Tools then
+				self:RefreshToolInfos()
+			end
+		end)
+
+		if ItemInfo.DataType == "Ranged" then
+			CToolInfos.ReloadConnection = Tool.InfoFolder.Ammo.Changed:Connect(function()
+				if Tool.InfoFolder.Ammo.Value == 0 and self.IsMoving == true then
+					self:EndWalk()
+				end
+			end)
+		end
+	end
+end
+
+function NPCClass:HasToolOfTypeEquipped(ToolType)
+	return self.CToolInfos.ToolType == ToolType
+end
+
+function NPCClass:FindToolOfType(ToolType, MaximumToolSize)
+	
+	local Tools = {}
+	
+	for _, Tool in pairs(self.NPCValue.Tools:GetChildren()) do
+		
+		if ItemList[Tool.Name].DataType == ToolType then
+			table.insert(Tools, Tool)
+		end
+	end
+
+	if self.CToolInfos.Tool then
+		if ItemList[self.CToolInfos.Tool.Name].DataType == ToolType then
+			table.insert(Tools, self.CToolInfos.Tool)
+		end
+	end
+	
+	local IdealTool = nil
+	
+	local IdealToolSize = 0
+	
+	for _, Tool in pairs(Tools) do
+		
+		local ToolSize = ItemList[Tool.Name].ToolSize
+		
+		if ToolSize <= MaximumToolSize and IdealToolSize < ToolSize then
+			IdealTool = Tool
+			
+			IdealToolSize = ToolSize
+		end
+	end
+	
+	return IdealTool
+end
+
+function NPCClass:SetToolEquipped(Tool)
+	
+	if self.CToolInfos.Tool == Tool then
+		return
+	end
+	
+	if Tool then
+		if self.CToolInfos.Tool then
+			self.CToolInfos.Tool.Parent = self.NPCValue.Tools
+		end
+
+		Tool.Parent = self.Character
+	else
+		if self.CToolInfos.Tool then
+			self.CToolInfos.Tool.Parent = self.NPCValue.Tools
+		end
+	end
+	
+	for _, Part in pairs(self.Character:GetDescendants()) do
+		if Part:IsA("BasePart") then
+			Part:SetNetworkOwner(nil)
+		end
+	end
+	
+	self:RefreshToolInfos()
+end
+
+function NPCClass:MoveVehicleToPosition(Position, Speed, ReturnWhenBlocked, IgnoreBlockingParts)
+	
+	if self.CurrentVehicle.Parent == nil or not self.CurrentVehicle then
+		return
+	end
+
+	local IsFinished = false
+
+	local HasReached = false
+
+	local ReasonForFail = nil
+
+	local TimeoutIndex = 0
+
+	local OriginalSpeed = Speed
+	
+	local FlatGoalPosition = Vector3.new(Position.X, 0, Position.Z)
+	
+	local CurrentSteerFactor = 0
+	
+	local CurrentAirSpeed = 0
+	
+	local CurrentRelativePosition = self.CurrentVehicle.Chassis.CarArea.CFrame:PointToObjectSpace(Position)
+	
+	task.spawn(function()
+		while IsFinished == false do
+
+			TimeoutIndex += 1
+
+			local AirVelocity = self.CurrentVehicle.PrimaryPart.Velocity
+
+			local AirSpeed = AirVelocity.Magnitude
+			
+			CurrentAirSpeed = AirSpeed
+
+			local BlockingPart = nil
+
+			local BlockingPartDistance = math.huge
+
+			local AngleOffset = CFrame.Angles(0,CurrentSteerFactor,0)
+
+			local CarFrontCFrame = self.CurrentVehicle.PrimaryPart.FrontEndAttachment.WorldCFrame
+
+			local FlatFrontPosition = Vector3.new(CarFrontCFrame.Position.X, 0, CarFrontCFrame.Position.Z)
+
+			local CheckDistance = AirSpeed * 2 + 6
+
+			if not IgnoreBlockingParts then
+
+				local SteeringFrontCFrame = CarFrontCFrame * AngleOffset
+
+				for _, Part in pairs(CollectionService:GetTagged("Obstacle")) do
+
+					if BlockingPartDistance == 0 then
+						break
+					end
+
+					--local VelocityVectorDifference = (AirVelocity - Part.Velocity).Magnitude
+
+					local ObjectSpace = SteeringFrontCFrame:PointToObjectSpace(Part.Position)
+
+
+					if math.abs(ObjectSpace.X) < 4 + Part.Size.X and not Part:IsDescendantOf(self.CurrentVehicle) then
+						if Part.Name == "TrafficLight" then
+							if Part.CFrame.LookVector:Dot(CarFrontCFrame.LookVector) > -0.5 then
+								continue
+							end
+						end
+
+						if -ObjectSpace.Z >= 0 then
+							
+							local HalfSize = Part.Size.Z / 2
+							
+							if -ObjectSpace.Z < CheckDistance + HalfSize then
+								local PartDistance = math.clamp(math.abs(ObjectSpace.Z) - HalfSize - 3, 0, math.huge)
+
+								if PartDistance < BlockingPartDistance then
+
+									local HeightDifference = math.abs(ObjectSpace.Y)
+
+									if HeightDifference < 10 then
+										BlockingPart = Part
+
+										BlockingPartDistance = PartDistance
+									end
+								end
+							end
+						end
+
+
+					end
+				end
+
+				if BlockingPart then
+
+					if ReturnWhenBlocked and AirSpeed < 60 then
+						IsFinished = true
+						ReasonForFail = "Blocked"
+						break
+					end
+
+					TimeoutIndex = 0
+				end
+			end
+
+			if not BlockingPart then
+				Speed = OriginalSpeed
+
+				if TimeoutIndex > 30 then
+					if math.clamp(AirSpeed, -2, 2) == AirSpeed then
+						ReasonForFail = "Stuck"
+						IsFinished = true
+						break
+					end
+				end
+			end
+
+			local FlatDistance = (FlatFrontPosition - FlatGoalPosition).Magnitude
+			
+			local BrakeRate = 0
+			
+			local BrakeAcceleration = nil
+			
+			local AccelerationRate = 0
+			
+			local TargetSpeed = nil
+			
+			local CurrentVehicleProperties = self.CurrentVehicleProperties
+			
+			if BlockingPart then
+				local BlockingPartVelocity = BlockingPart.Velocity.Magnitude
+
+				local VelocityDifference = AirSpeed - BlockingPartVelocity
+
+				if AirSpeed < 1 then
+					BrakeRate = 1
+				else
+					if VelocityDifference > 0 then
+						BrakeRate = 1
+						BrakeAcceleration = self.ChassisHandler:GetAngularAcceleration(AirSpeed, BlockingPartVelocity, BlockingPartDistance - BlockingPartVelocity / 2)
+						
+						if not self.HonkDebounce and (AirSpeed - BlockingPartVelocity) / BlockingPartDistance > 1.5 and AirSpeed > 5 then
+							Events.VehicleInteraction:FireAllClients("PlayHornPattern", self.CurrentVehicle, HonkPatterns[math.random(1, #HonkPatterns)])
+							
+							self.HonkDebounce = true
+							
+							delay(5, function()
+								self.HonkDebounce = nil
+							end)
+						end
+					else
+						AccelerationRate = BlockingPartDistance / CheckDistance
+						TargetSpeed = BlockingPartVelocity
+					end
+				end
+			end
+			
+			if AirSpeed > Speed + 5 then
+				
+				local SpeedBrakeAcceleration = self.ChassisHandler:GetAngularAcceleration(AirSpeed, Speed, FlatDistance / 2)
+				
+				if BrakeRate ~= 0 then
+					if SpeedBrakeAcceleration > BrakeAcceleration then
+						BrakeAcceleration = SpeedBrakeAcceleration
+					end
+				else
+					BrakeAcceleration = SpeedBrakeAcceleration
+					BrakeRate = 1
+					AccelerationRate = 0
+				end	
+			elseif BrakeRate == 0 and not BlockingPart then
+				AccelerationRate = AirSpeed - 5 < Speed and 0.3 or 1
+				TargetSpeed = Speed
+			end
+			
+			if self.VehicleInstance.EngineRunning == false then
+				AccelerationRate = 0
+				self.VehicleInstance:ToggleEngine(true)
+			end
+			
+			if CurrentVehicleProperties.Braking ~= BrakeRate or (CurrentVehicleProperties.BrakingAcceleration ~= BrakeAcceleration) then
+				
+				self.ChassisHandler:SetBraking(BrakeRate, BrakeAcceleration)
+				CurrentVehicleProperties.Braking = BrakeRate
+				CurrentVehicleProperties.BrakingAcceleration = BrakeAcceleration
+			end
+			
+			if (CurrentVehicleProperties.Acceleration ~= AccelerationRate) or (CurrentVehicleProperties.TargetSpeed ~= TargetSpeed) then
+				
+				self.ChassisHandler:SetAcceleration(AccelerationRate, TargetSpeed)
+				CurrentVehicleProperties.Acceleration = AccelerationRate
+				CurrentVehicleProperties.TargetSpeed = TargetSpeed
+			end
+			
+			if self.ThreadClosing then
+				IsFinished = true
+				ReasonForFail = "ThreadClosing"
+			end
+
+			task.wait(0.3)
+		end
+	end)
+	
+	while IsFinished == false do
+		
+		if not self.CurrentVehicle or self.CurrentVehicle.Parent == nil then
+			IsFinished = true
+			HasReached = false
+			break
+		end
+
+		CurrentRelativePosition = self.CurrentVehicle.Chassis.CarArea.CFrame:PointToObjectSpace(Position)
+
+		CurrentSteerFactor = CurrentRelativePosition.X / -(self.CurrentVehicle.PrimaryPart.Position - Position).Magnitude
+
+		self.ChassisHandler:SetSteer(CurrentSteerFactor * (Speed > 30 and 1 or 2), CurrentAirSpeed, true)
+
+		local CarFrontCFrame = self.CurrentVehicle.PrimaryPart.CFrame
+
+		local FlatFrontPosition = Vector3.new(CarFrontCFrame.Position.X, 0, CarFrontCFrame.Position.Z)
+
+		local FlatDistance = (FlatFrontPosition - FlatGoalPosition).Magnitude
+		
+		if self.ThreadClosing then
+			IsFinished = true
+			HasReached = false
+		end
+
+		if CurrentRelativePosition.Z > -self.CurrentVehicle.Chassis.CarArea.Size.Z and FlatDistance < math.clamp(Speed * 0.5, 20, math.huge) then
+			IsFinished = true
+			HasReached = true
+		end
+
+		task.wait()
+	end
+
+	return HasReached, ReasonForFail
+end
+
+function NPCClass:FollowDriveToTarget()
+	
+end
+
+function NPCClass:FindAndSetVehicleWaypoint()
+	local ClosestPoint = nil
+
+	local SmallestDistance = math.huge
+
+	local VehicleFrontPosition = self.CurrentVehicle.PrimaryPart.Position + self.CurrentVehicle.Chassis.CarArea.CFrame.LookVector * self.CurrentVehicle.Chassis.CarArea.Size.Z * 0.5
+
+	for WaypointIndex, WaypointInfo in pairs(WaypointsList.VehiclePaths) do
+		local Distance = (VehicleFrontPosition - WaypointInfo.Position).Magnitude
+		
+		if Distance < SmallestDistance then
+			ClosestPoint = WaypointIndex
+
+			SmallestDistance = Distance
+		end
+	end
+
+	self:SetCurrentVehicleWaypoint(ClosestPoint)
+end
+
+function NPCClass:EndDrive()
+	self.IsDriving = false
+end
+
+function NPCClass:DriveToWaypoint(GoalWaypoint, UsePathFinding, IgnorePointsAmount, Mode)
+	
+	if not self.CurrentVehicle then
+		return false
+	end
+
+	if not self.CurrentVehicleWaypointIndex then
+		self:FindAndSetVehicleWaypoint()
+	end
+	
+	self.DriveIndex += 1
+	
+	self.IsDriving = true
+
+	IgnorePointsAmount = IgnorePointsAmount or 0
+
+	if UsePathFinding then
+
+		local Waypoints = self:CalculateWaypointPath(self.CurrentVehicleWaypointIndex, GoalWaypoint)
+		
+		if not Waypoints then
+			warn("could not calculate")
+			return false
+		end
+
+		IgnorePointsAmount = math.clamp(IgnorePointsAmount, 0, #Waypoints)
+
+		local FailAmount = 0
+
+		local Index = 0
+
+		local SpeedMultiplier = Mode == "Rush" and 1.2 or 1
+		
+		while Index < #Waypoints do
+
+			Index += 1
+
+			local WaypointIndex = Waypoints[Index]
+			
+			local WaypointInfo = WaypointsList.VehiclePaths[WaypointIndex]
+			
+			if self.ThreadClosing or not self.ChassisHandler then
+				self:EndDrive()
+				return false
+			end
+			
+			local HasReached, FailReason = self:MoveVehicleToPosition(WaypointInfo.Position, WaypointInfo.MaxSpeed * SpeedMultiplier, Mode == "Rush")
+			
+			if not HasReached then
+				
+				if self.ThreadClosing then
+					self:EndDrive()
+					return false
+				end
+
+
+				if Mode == "Rush" and FailReason == "Blocked" then
+					local NextIndex = Index
+
+					local CarFrontCFrame = self.CurrentVehicle.Chassis.CarArea.CFrame + self.CurrentVehicle.Chassis.CarArea.CFrame.LookVector * (self.CurrentVehicle.Chassis.CarArea.Size.Z * 0.5 + 6)
+
+					local NormalPathfindingSuccess = false
+
+					while NextIndex < #Waypoints - IgnorePointsAmount and NormalPathfindingSuccess == false do
+						NextIndex += 1
+
+						self.VehiclePathInfo:ComputeAsync(CarFrontCFrame.Position, WaypointsList.VehiclePaths[Waypoints[NextIndex]].Position)
+
+						if self.VehiclePathInfo.Status == Enum.PathStatus.Success then
+							NormalPathfindingSuccess = true
+						end
+
+						local TempWaypoints = self.VehiclePathInfo:GetWaypoints()
+
+						for _, WaypointInfo in pairs(TempWaypoints) do
+							local HasReached = self:MoveVehicleToPosition(WaypointInfo.Position, self.CurrentVehicleWaypointInfo.MaxSpeed, false, true)
+
+							if not HasReached then
+								local RelativePosition = self.CurrentVehicle.Chassis.CarArea.CFrame:PointToObjectSpace(WaypointInfo.Position)
+
+								local SteerFactor = RelativePosition.X / -(self.CurrentVehicle.PrimaryPart.Position - WaypointInfo.Position).Magnitude
+								
+								self:ReverseVehicle(-SteerFactor)
+
+								break
+							end
+						end
+					end
+
+					Index = NextIndex
+				else
+					FailAmount += 1
+
+					local RelativePosition = self.CurrentVehicle.Chassis.CarArea.CFrame:PointToObjectSpace(WaypointInfo.Position)
+
+					local SteerFactor = RelativePosition.X / -(self.CurrentVehicle.PrimaryPart.Position - WaypointInfo.Position).Magnitude
+
+					self:ReverseVehicle(-SteerFactor)
+				end
+				
+			else
+				self:SetCurrentVehicleWaypoint(Waypoints[Index + 1])
+			end
+
+			if FailAmount >= 3 then
+				self:EndDrive()
+				return false
+			end
+
+			if Index > #Waypoints - IgnorePointsAmount then
+				self:EndDrive()
+				return true
+			end
+		end
+
+
+	end
+	
+	return true
+end
+
+function NPCClass:OnBurstEnded()
+	
+	self:SetWalkSpeed(WalkSpeeds.Run)
+	
+	self.BurstDebounce = false
+end
+
+function NPCClass:OnDamaged(Reverse)
+	AnimationHandler:Play("Harmed".. math.random(1, 3), self.Humanoid)
+	
+	self.DamagedIndex += 1
+
+	local CurrentIndex = self.DamagedIndex
+
+	self.DamageDebounce = true
+	
+	self:SetWalkSpeed(0)
+	self.Humanoid:MoveTo(self.PrimaryPart.Position)
+
+	if Reverse then
+		
+		task.delay(1.5, function()
+			
+			if self.DamagedIndex == CurrentIndex then
+				self.DamageDebounce = false
+				self:SetWalkSpeed(WalkSpeeds.Run)
+			end
+		end)
+	end
+end
+
+function NPCClass:FireBurst(Amount, OptionalWaitTime, AccuracyMultiplier)
+
+	if self.BurstDebounce == true or not self.CurrentTarget then
+		return
+	end
+	
+	AccuracyMultiplier = AccuracyMultiplier or 1
+	
+	local Tool = self.CToolInfos.Tool
+
+	self.BurstDebounce = true
+
+	if OptionalWaitTime then
+		task.wait(OptionalWaitTime)
+	end
+
+	local AimingTarget = self.CurrentTarget
+
+	if self.ThreadClosing or not Tool or not self.BurstDebounce then
+		
+		self:OnBurstEnded()
+
+		return
+	end
+	
+	local TargetDistance = (self.CurrentTarget.PrimaryPart.Position - self.PrimaryPart.Position).Magnitude
+
+	local TargetVelocity = self.CurrentTarget.PrimaryPart.Velocity
+
+	local TargetVelocityUnit = TargetVelocity == Vector3.new(0,0,0) and Vector3.new(0,0,0) or TargetVelocity.Unit
+	
+	local DirectionCFrame = CFrame.lookAt(Tool.ToolModel.Main.Position, self.CurrentTarget.Head.Position)
+
+	local Linearity = DirectionCFrame.LookVector:Dot(TargetVelocityUnit)
+
+	Linearity = math.abs(Linearity)
+
+	Linearity = math.abs(Linearity - 1)
+	
+	--local CalculatedAccuracy = self.Accuracy + Linearity * TargetVelocity.Magnitude ^ 0.05 + (Amount / 30)
+	
+	local CalculatedAccuracy = math.deg(math.tan((self.Accuracy + TargetDistance * 0.001) / TargetDistance))-- + Linearity * TargetVelocity.Magnitude ^ 0.02
+	
+	CalculatedAccuracy = math.clamp(CalculatedAccuracy , 0, 4) * AccuracyMultiplier
+	
+	local HandMuzzleDistance = (self.Character.RightHand.Position - Tool.ToolModel.Main.Position).Magnitude
+	
+	for i = 1, Amount do
+
+		if not Tool or Tool.Parent == nil or Tool.InfoFolder.Ammo.Value <= 0 or not self.CurrentTarget or self.CurrentTarget.Parent == nil or self.PropertyFolder.Ragdolled.Value or self.DamageDebounce then
+			
+			self:OnBurstEnded()
+
+			return
+		end
+		
+		self:SetWalkSpeed(WalkSpeeds.Walk)
+		
+		if self.Suppressed and self.CurrentCover and not self.IsMoving and self:HasCombatFlag("ReactToSuppression") then
+			self:OnBurstEnded()
+
+			return
+		end
+
+		task.spawn(function()
+			if not Tool then
+				return
+			end
+			
+			local MuzzleCFrame = Tool.ToolModel.Main.CFrame
+
+			local OriginPosition = MuzzleCFrame.Position - MuzzleCFrame.LookVector * HandMuzzleDistance
+			
+			local TargetDirection = (self.CurrentTarget.UpperTorso.Position - OriginPosition).Unit
+			
+			local OffsetDirection = GunModule:CreateRandomAnglesValue(CalculatedAccuracy):VectorToWorldSpace(TargetDirection)
+
+			local HitInfos = ClientGunModule:CalculateFire({Character = self.Character}, Tool, self.CToolInfos.ItemInfo, OriginPosition, OffsetDirection)
+
+			GunModule:OnGunFired({Character = self.Character}, HitInfos)
+		end)
+		
+		task.wait(60 / (self.CToolInfos.ItemInfo.TypeProperties.Firerate.NonPlayer + math.random(-10, 10)))
+	end
+
+	self:OnBurstEnded()
+end
+
+function NPCClass:SetCover(CoverPart, IsCovering)
+
+	CoverPart = CoverPart or self.CurrentCover
+	
+	if IsCovering == false then
+		self:ToggleCrouch(false)
+		
+		self:ToggleCrouchAnimations(false)
+	end
+
+	if not CoverPart or CoverPart.Parent == nil then
+		return
+	end
+
+	CoverPart.Occupant.Value = IsCovering and self.Character or nil
+
+	self.CurrentCover = IsCovering and CoverPart or nil
+end
+
+function NPCClass:EndWalk()
+	
+	self.IsMoving = false
+end
+
+function NPCClass:WalkToPosition(Position, UsePathFinding, IgnorePointsAmount)
+	
+	self:EndWalk()
+
+	IgnorePointsAmount = IgnorePointsAmount or 0
+
+	if self.PropertyFolder.Ragdolled.Value == true then
+		return false
+	end
+
+	self.WalkIndex += 1
+
+	local CurrentWalkIndex = self.WalkIndex
+
+	self.IsMoving = true
+
+	local WalkFailed = false
+
+	if UsePathFinding then
+
+		self.PathInfo:ComputeAsync(self.Character.PrimaryPart.Position - Vector3.new(0,2,0), Position)
+
+		if self.PathInfo.Status ~= Enum.PathStatus.Success then
+
+			--warn(self.Character, "Failed to compute path, status : ", self.PathInfo.Status, Position)
+
+			self:EndWalk()
+
+			return false
+		end
+
+		local BlockedConnection = nil
+
+		local CurrentWaypointIndex = 0
+
+		BlockedConnection = self.PathInfo.Blocked:Connect(function(BlockedWaypoint)
+
+			if BlockedWaypoint >= CurrentWaypointIndex then
+				BlockedConnection:Disconnect()
+				
+				self.Humanoid:MoveTo(self.PrimaryPart.Position)
+
+				BlockedConnection = nil
+
+				self:EndWalk()
+			end 
+		end)
+
+		local Waypoints = self.PathInfo:GetWaypoints()
+
+		IgnorePointsAmount = math.clamp(IgnorePointsAmount, 0, #Waypoints)
+		
+		for Index, WaypointInfo in pairs(Waypoints) do
+
+			if self.WalkIndex ~= CurrentWalkIndex or self.IsMoving == false then
+				
+				WalkFailed = true
+				break
+			end
+
+			if Index > #Waypoints - IgnorePointsAmount then
+
+				break
+			end
+
+			CurrentWaypointIndex = Index
+
+			self.Humanoid:MoveTo(WaypointInfo.Position)
+
+			local Reached = self.Humanoid.MoveToFinished:Wait()
+
+			if not Reached then
+				WalkFailed = true
+				break
+			end
+		end
+
+		if BlockedConnection then
+			BlockedConnection:Disconnect()
+
+			BlockedConnection = nil
+		end
+	else
+		self.Humanoid:MoveTo(Position)
+
+		self.Humanoid.MoveToFinished:Wait()
+	end
+
+
+
+	if self.WalkIndex == CurrentWalkIndex then
+		self:EndWalk()
+	end
+
+	return not WalkFailed
+end
+
+function NPCClass:IsSafeCover(CoverAttachment)
+	
+	local TargetPosition = self.CurrentTarget.Head.Position
+
+	local Linearity = (CoverAttachment.WorldPosition - TargetPosition).Unit:Dot(CoverAttachment.WorldCFrame.LookVector)
+	
+	if Linearity > 0.75 and (CoverAttachment.Occupant.Value == nil or CoverAttachment.Occupant.Value == self.Character) and (TargetPosition - CoverAttachment.WorldPosition).Magnitude > 25 then
+		return true
+	end
+end
+
+function NPCClass:IsSafeCoverToMoveTo(CoverAttachment)
+
+	local TargetPosition = self.CurrentTarget.Head.Position
+
+	local Linearity = (CoverAttachment.WorldPosition - TargetPosition).Unit:Dot((TargetPosition - self.PrimaryPart.Position).Unit)
+
+	if Linearity < 0 then
+		return true
+	end
+end
+
+function NPCClass:IsFiringAngleCover(CoverAttachment)
+	
+	local TargetPosition = self.CurrentTarget.Head.Position
+
+	local FiringVector = CoverAttachment.Name == "LowCover" and - CoverAttachment.WorldCFrame.LookVector or CoverAttachment.FirePosition.Value.Unit
+
+	local CoverTargetDirection = (TargetPosition - CoverAttachment.WorldPosition).Unit
+
+	if FiringVector:Dot(CoverTargetDirection) > -0.25 then
+
+		return true
+	end
+	
+	
+end
+
+function NPCClass:IsFlankCover(CoverAttachment)
+
+	if CoverAttachment.Parent == nil or self.CurrentTarget.Parent == nil then
+		return false
+	end
+
+	local FirePosition = CoverAttachment.WorldCFrame:PointToWorldSpace(CoverAttachment.FirePosition.Value)
+
+	local DifferenceVector = (self.CurrentTarget.Head.Position - FirePosition)
+
+	--if DifferenceVector.Magnitude > 300 then
+	--	return false
+	--end
+
+	local Params = RaycastParams.new()
+
+	Params.FilterDescendantsInstances = {workspace.Buildings, workspace.Props, workspace.MapParts, workspace.Vehicles, workspace.Roads}
+
+	Params.FilterType = Enum.RaycastFilterType.Include
+
+	local Result = workspace:Raycast(FirePosition, DifferenceVector, Params)
+
+	return Result == nil
+end
+
+function NPCClass:IsIdealCover(CoverAttachment, BlindDistance)
+	
+	if CoverAttachment.Parent == nil or self.CurrentTarget.Parent == nil then
+		return false
+	end
+	
+	local FirePosition = CoverAttachment.WorldCFrame:PointToWorldSpace(CoverAttachment.FirePosition.Value)
+	
+	local DifferenceVector = (self.CurrentTarget.Head.Position - FirePosition)
+	
+	if DifferenceVector.Magnitude > self.CToolInfos.ItemInfo.TypeProperties.Range.MaxRange then
+		return false
+	end
+	
+	DifferenceVector = DifferenceVector.Unit * math.clamp(DifferenceVector.Magnitude, 0, self.CToolInfos.ItemInfo.TypeProperties.Range.MaxRange)
+
+	--if DifferenceVector.Magnitude > 300 then
+	--	return false
+	--end
+	
+	local Params = RaycastParams.new()
+	
+	Params.FilterDescendantsInstances = {workspace.Buildings, workspace.Props, workspace.MapParts, workspace.Roads}
+	
+	Params.FilterType = Enum.RaycastFilterType.Include
+	
+	local Result = workspace:Raycast(FirePosition, DifferenceVector, Params)
+	
+	local HitPointDistance = 0
+	
+	if Result then
+		HitPointDistance = (Result.Position - self.CurrentTarget.Head.Position).Magnitude
+	end
+	
+	return BlindDistance >= HitPointDistance
+end
+
+function NPCClass:FindFlankCoverAttachment()
+	if not self.CurrentTarget or self.CurrentTarget.Parent == nil then
+		return
+	end
+
+	local IdealCover = nil
+
+	local TargetPosition = self.CurrentTarget.Head.Position
+
+	local IdealCoverScore = math.huge
+	
+	for _, CoverCluster in pairs(CollectionService:GetTagged("CoverCluster")) do
+
+		local ClusterDistance = (TargetPosition - CoverCluster.Position).Magnitude
+
+		if CoverCluster.Velocity.Magnitude < 1 and ClusterDistance < 200 then
+			for _, CoverAttachment in pairs(CoverCluster:GetChildren()) do
+
+				if not table.find(self.IgnoredCover, CoverAttachment) then
+
+					local InverseCoverScore = (self.PrimaryPart.Position - CoverAttachment.WorldPosition).Magnitude
+
+					if self:IsSafeCover(CoverAttachment) and self:IsFlankCover(CoverAttachment) then
+
+						if InverseCoverScore < IdealCoverScore then
+
+							IdealCover = CoverAttachment
+
+							IdealCoverScore = InverseCoverScore
+						end
+
+
+					end
+				end
+			end
+		end
+	end
+	
+	return IdealCover
+end
+
+function NPCClass:FindSafestCoverAttachment()
+	if not self.CurrentTarget or self.CurrentTarget.Parent == nil then
+		return
+	end
+
+	local SafeCover = nil
+	
+	local TargetPosition = self.CurrentTarget.Head.Position
+	
+	local SafeCoverScore = math.huge
+	
+	for _, CoverCluster in pairs(CollectionService:GetTagged("CoverCluster")) do
+
+		local ClusterDistance = (TargetPosition - CoverCluster.Position).Magnitude
+
+		if CoverCluster.Velocity.Magnitude < 1 and ClusterDistance < 150 then
+			for _, CoverAttachment in pairs(CoverCluster:GetChildren()) do
+
+				if not table.find(self.IgnoredCover, CoverAttachment) then
+
+					local InverseCoverScore = (self.PrimaryPart.Position - CoverAttachment.WorldPosition).Magnitude
+
+					if self:IsSafeCover(CoverAttachment) then
+
+						if InverseCoverScore < SafeCoverScore then
+
+							SafeCover = CoverAttachment
+
+							SafeCoverScore = InverseCoverScore
+						end
+
+
+					end
+				end
+			end
+		end
+	end
+	
+	return SafeCover
+end
+
+function NPCClass:FindCoverAttachment(BlindDistance)
+	
+	if not self.CurrentTarget or self.CurrentTarget.Parent == nil then
+		return
+	end
+	
+	local SafeCover = nil
+	
+	local FiringAngleCover = nil
+	
+	local IdealCover = nil
+	
+	local TargetPosition = self.CurrentTarget.Head.Position
+	
+	local CoverScores = {
+		SafeCover = math.huge,
+		FiringAngleCover = math.huge,
+		IdealCover = math.huge
+	}
+	
+	local IdealDistanceFromTarget = (self.Fear + 30) * 2
+	
+	for _, CoverCluster in pairs(CollectionService:GetTagged("CoverCluster")) do
+
+		local ClusterDistance = (TargetPosition - CoverCluster.Position).Magnitude
+		
+		if CoverCluster.Velocity.Magnitude < 1 and ClusterDistance < 250 then
+			
+			for _, CoverAttachment in pairs(CoverCluster:GetChildren()) do
+
+				if not table.find(self.IgnoredCover, CoverAttachment) then
+					
+					local DistanceFromCover = math.floor((self.PrimaryPart.Position - CoverAttachment.WorldPosition).Magnitude)
+					
+					local IdealDistanceOffset = math.floor(math.abs(IdealDistanceFromTarget - (TargetPosition - CoverAttachment.WorldPosition).Magnitude))
+					
+					local InverseCoverScore = DistanceFromCover
+					
+					if self:IsSafeCover(CoverAttachment) then
+						
+						if InverseCoverScore < CoverScores.SafeCover then
+							
+							SafeCover = CoverAttachment
+
+							CoverScores.SafeCover = InverseCoverScore
+						end
+						
+						if self:IsSafeCoverToMoveTo(CoverAttachment) then
+							if self:IsFiringAngleCover(CoverAttachment) then
+
+								if InverseCoverScore < CoverScores.FiringAngleCover and InverseCoverScore < CoverScores.SafeCover * 3 then
+									FiringAngleCover = CoverAttachment
+
+									CoverScores.FiringAngleCover = InverseCoverScore
+								end
+
+								if self:IsIdealCover(CoverAttachment, BlindDistance) and InverseCoverScore < CoverScores.SafeCover * 4 then
+									if InverseCoverScore < CoverScores.IdealCover then
+										IdealCover = CoverAttachment
+
+										CoverScores.IdealCover = InverseCoverScore
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	
+	return IdealCover or FiringAngleCover or SafeCover
+end
+
+function NPCClass.GetNPCClass(Character)
+	
+	return NPCClass.NPCCharacters[Character]
+end
+
+function NPCClass:ChangeMode(NewMode, ...)
+	
+	if NewMode ~= "Dead" and (self.Humanoid.Health <= 0 or self.ThreadClosing) then
+		return
+	end
+	
+	if self.Task == NewMode then
+		return
+	end
+	
+	if self.CurrentThread then
+		self.ThreadClosing = true
+		
+		repeat
+			
+			wait()
+		until coroutine.status(self.CurrentThread) == "dead"
+		
+		self.ThreadClosing = false
+	end
+	
+	self.CurrentThread = coroutine.create(Tasks[NewMode])
+	
+	self.Task = NewMode
+	
+	assert(coroutine.resume(self.CurrentThread, self, ...))
+end
+
+function NPCClass:Destroy()
+	
+	if not NPCClass.NPCCharacters[self.Character] then
+		return
+	end
+	
+	NPCClass.NPCCharacters[self.Character] = nil
+	
+	self = nil
+
+	return nil
+end
+
+
+
+return NPCClass
