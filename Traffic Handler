@@ -1,0 +1,120 @@
+local TrafficHandler = {}
+
+local CollectionService = game:GetService("CollectionService")
+
+function ToggleLamp(Part, IsActive)
+	Part.Material = IsActive and Enum.Material.Neon or Enum.Material.SmoothPlastic
+end
+
+function SwitchLightGroup(GroupTable, IsRed)
+	if IsRed then
+		for _, Light in pairs(GroupTable) do
+			ToggleLamp(Light.Green, false)
+			ToggleLamp(Light.Yellow, true)
+		end
+		
+		task.wait(1.5)
+		
+		for _, Light in pairs(GroupTable) do
+			ToggleLamp(Light.Yellow, false)
+			ToggleLamp(Light.Red, true)
+		end
+		
+		
+	else
+		for _, Light in pairs(GroupTable) do
+			ToggleLamp(Light.Green, true)
+			ToggleLamp(Light.Red, false)
+		end
+	end
+end
+
+function TrafficHandler:ToggleNextPhase(LightsSet)
+	
+	local LightsSetInfo = TrafficHandler.LightPhases[LightsSet]
+	
+	local Index = LightsSetInfo.CurrentPhaseIndex
+	
+	local NextIndex = Index == LightsSetInfo.PhaseCount and 1 or Index + 1
+	
+	local NewLightsTable = {}
+	
+	for _, Light in pairs(LightsSetInfo.Phases[Index].Lights) do
+		if not table.find(LightsSetInfo.Phases[NextIndex].Lights, Light) then
+			table.insert(NewLightsTable, Light)
+		end
+	end
+	
+	for _, Obstacle in pairs(LightsSetInfo.Phases[Index].Obstacles) do
+		if not table.find(LightsSetInfo.Phases[NextIndex].Obstacles, Obstacle) then
+			CollectionService:AddTag(Obstacle, "Obstacle")
+		end
+	end
+	
+	SwitchLightGroup(NewLightsTable, true)
+	
+	task.wait(LightsSetInfo.Phases[Index].PhaseDelay)
+	
+	SwitchLightGroup(LightsSetInfo.Phases[NextIndex].Lights, false)
+	
+	for _, Obstacle in pairs(LightsSetInfo.Phases[NextIndex].Obstacles) do
+		CollectionService:RemoveTag(Obstacle, "Obstacle")
+	end
+	
+	LightsSetInfo.CurrentPhaseIndex = NextIndex
+end
+
+function TrafficHandler:Initiate()
+	
+	TrafficHandler.LightPhases = {}
+	
+	for _, LightsSet in pairs(workspace.TrafficLights:GetChildren()) do
+		
+		TrafficHandler.LightPhases[LightsSet] = {Phases = {}, PhaseCount = #LightsSet.Phases:GetChildren(), CurrentPhaseIndex = 1}
+		
+		for Index, Phase in pairs(LightsSet.Phases:GetChildren()) do
+			TrafficHandler.LightPhases[LightsSet].Phases[Index] = {Lights = {}, Obstacles = {}, Duration = Phase.Duration.Value, PhaseDelay = Phase.Delay.Value}
+			
+			Phase.Duration:Destroy()
+			
+			Phase.Delay:Destroy()
+			
+			for _, Obstacle in pairs(LightsSet.Obstacles:GetChildren()) do
+				
+				Obstacle.Transparency = 1
+				
+				for _, PhaseValue in pairs(Obstacle:GetChildren()) do
+					if PhaseValue.Value == Phase.Name then
+						table.insert(TrafficHandler.LightPhases[LightsSet].Phases[Index].Obstacles, Obstacle)
+					end
+				end
+			end
+			
+			for _, TrafficLight in pairs(LightsSet.Lights:GetChildren()) do
+				for _, Light in pairs(TrafficLight:GetChildren()) do
+					if Light.Name == "Light" then
+						
+						for _, PhaseValue in pairs(Light:GetChildren()) do
+							if PhaseValue.Name == "Phase" then
+								if PhaseValue.Value == Phase.Name then
+									table.insert(TrafficHandler.LightPhases[LightsSet].Phases[Index].Lights, Light)
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+		
+		spawn(function()
+			while true do
+				
+				TrafficHandler:ToggleNextPhase(LightsSet)
+				
+				task.wait(TrafficHandler.LightPhases[LightsSet].Phases[TrafficHandler.LightPhases[LightsSet].CurrentPhaseIndex].Duration)
+			end
+		end)
+	end
+end
+
+return TrafficHandler
