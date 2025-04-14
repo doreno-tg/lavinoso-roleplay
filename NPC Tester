@@ -1,0 +1,161 @@
+local HoodianSpawnDeb = false
+
+local VehicleClass = require(game.ServerScriptService.VehicleClass)
+
+local MilitarySpawnDeb = false
+
+local SwatSpawnDeb = false
+
+local SabrinaDeb = false
+
+local NPCHandler = require(game.ServerScriptService.NPCHandler)
+
+local WantedHandler = require(game.ServerScriptService.WantedHandler)
+
+for _, Part in pairs(script.Parent.WantedParts:GetChildren()) do
+	Part.Touched:Connect(function(TouchedPart)
+		local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+		
+		if Player then
+			
+			WantedHandler:ChangeWantedLevel(Player.Character, tonumber(Part.Name))
+		end
+	end)
+end
+
+script.Parent.InfHealth.Touched:Connect(function(TouchedPart)
+	local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+
+	if Player then
+
+		Player.Character.Humanoid.MaxHealth = math.huge
+		Player.Character.Humanoid.Health = math.huge
+	end
+end)
+
+script.Parent.CarDoors.Touched:Connect(function()
+	for _, Vehicle in pairs(workspace.Vehicles:GetChildren()) do
+		local VehicleInstance = VehicleClass.GetVehicleClass(Vehicle)
+		
+		for _, Door in pairs(Vehicle.Body.MovableParts:GetChildren()) do
+			VehicleInstance:ToggleMovablePart(Door, true)
+		end
+	end
+end)
+
+script.Parent.RepairCars.Touched:Connect(function()
+	for _, Vehicle in pairs(workspace.Vehicles:GetChildren()) do
+		local VehicleInstance = VehicleClass.GetVehicleClass(Vehicle)
+
+		VehicleInstance:RepairVehicle()
+	end
+end)
+
+script.Parent.SpawnHoodianTank.Touched:Connect(function(TouchedPart)
+	local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+
+	if #workspace.NPCs:GetChildren() > 30 then
+		return
+	end
+
+	if Player and not HoodianSpawnDeb then
+		HoodianSpawnDeb = true
+
+		local NPC = NPCHandler:SpawnNPCFromGroup("HoodianTanks", {CurrentBehavior = "Combat"}, {}, {})
+
+		NPC.PrimaryPart.CFrame = script.Parent.SpawnHoodianTank.CFrame * CFrame.new(0, 3, 0)
+
+		NPC.Parent = workspace.NPCs
+
+		HoodianSpawnDeb = false
+
+		NPC.Controller.Enabled = true
+	end
+end)
+
+script.Parent.SpawnHoodian.Touched:Connect(function(TouchedPart)
+	local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+	
+	if #workspace.NPCs:GetChildren() > 30 then
+		return
+	end
+	
+	if Player and not HoodianSpawnDeb then
+			HoodianSpawnDeb = true
+
+			local NPC = NPCHandler:SpawnNPCFromGroup("Hoodians", {CurrentBehavior = "Combat"}, {}, {})
+
+			NPC.PrimaryPart.CFrame = script.Parent.SpawnHoodian.CFrame * CFrame.new(0, 3, 0)
+
+			NPC.Parent = workspace.NPCs
+
+		HoodianSpawnDeb = false
+		
+		NPC.Controller.Enabled = true
+	end
+end)
+
+script.Parent.SpawnMilitary.Touched:Connect(function(TouchedPart)
+	local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+
+	if #workspace.NPCs:GetChildren() > 30 then
+		return
+	end
+
+	if Player and not MilitarySpawnDeb then
+		MilitarySpawnDeb = true
+
+		local NPC = NPCHandler:SpawnNPCFromGroup("Marines", {CurrentBehavior = "Combat"}, {}, {})
+
+		NPC.PrimaryPart.CFrame = script.Parent.SpawnMilitary.CFrame * CFrame.new(0, 3, 0)
+
+		NPC.Parent = workspace.NPCs
+
+		MilitarySpawnDeb = false
+
+		NPC.Controller.Enabled = true
+	end
+end)
+
+script.Parent.SpawnSwat.Touched:Connect(function(TouchedPart)
+	local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+
+	if #workspace.NPCs:GetChildren() > 30 then
+		return
+	end
+
+	if Player and not SwatSpawnDeb then
+		SwatSpawnDeb = true
+
+		local NPC = NPCHandler:SpawnNPCFromGroup("SpecialForces", {CurrentBehavior = "Combat"}, {}, {})
+
+		NPC.PrimaryPart.CFrame = script.Parent.SpawnSwat.CFrame * CFrame.new(0, 3, 0)
+
+		NPC.Parent = workspace.NPCs
+
+		SwatSpawnDeb = false
+
+		NPC.Controller.Enabled = true
+	end
+end)
+
+script.Parent.Sabrina.Touched:Connect(function(TouchedPart)
+	local Player = game.Players:GetPlayerFromCharacter(TouchedPart.Parent)
+
+	if Player and SabrinaDeb == false then
+
+		SabrinaDeb = true
+
+		delay(1, function()
+			SabrinaDeb = false
+		end)
+		
+		local NPC = NPCHandler:SpawnNPC("F_Y_WHI_SABRINA", {CurrentBehavior = "Combat"}, {}, {Invincible = false})
+
+		NPC.PrimaryPart.CFrame = script.Parent.Sabrina.CFrame * CFrame.new(0, 3, 0)
+
+		NPC.Parent = workspace.NPCs
+		
+		NPC.Controller.Enabled = true
+	end
+end)
