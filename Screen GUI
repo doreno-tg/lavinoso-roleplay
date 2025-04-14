@@ -1,0 +1,105 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MainMenu"
+gui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+
+
+local button = Instance.new("Frame")
+button.Name = "PlayButton"
+button.Size = UDim2.new(0, 300, 0, 120)
+button.Position = UDim2.new(0.5, -150, 0.5, -60)
+button.AnchorPoint = Vector2.new(0.5, 0.5)
+button.BackgroundTransparency = 1
+button.Parent = gui
+
+
+local gradient = Instance.new("UIGradient")
+gradient.Rotation = 90
+gradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200, 200, 200)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 150, 150))
+})
+gradient.Parent = button
+
+
+local stroke = Instance.new("UIStroke")
+stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+stroke.Color = Color3.new(1, 1, 1)
+stroke.Thickness = 3
+stroke.Transparency = 0.7
+stroke.Parent = button
+
+
+local strokeGradient = Instance.new("UIGradient")
+strokeGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(200, 200, 200)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
+})
+strokeGradient.Parent = stroke
+
+
+local innerFrame = Instance.new("Frame")
+innerFrame.Size = UDim2.new(1, -10, 1, -10)
+innerFrame.Position = UDim2.new(0, 5, 0, 5)
+innerFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+innerFrame.Parent = button
+
+
+local madeBy = Instance.new("TextLabel")
+madeBy.Text = "MADE BY KIRILL KHILUYTICH"
+madeBy.Font = Enum.Font.GothamBold
+madeBy.TextSize = 14
+madeBy.TextColor3 = Color3.new(1, 1, 1)
+madeBy.Size = UDim2.new(1, 0, 0, 20)
+madeBy.Position = UDim2.new(0, 0, 0, 10)
+madeBy.BackgroundTransparency = 1
+madeBy.Parent = innerFrame
+
+
+local playText = Instance.new("TextLabel")
+playText.Text = "PLAY"
+playText.Font = Enum.Font.GothamBlack
+playText.TextSize = 32
+playText.TextColor3 = Color3.new(1, 1, 1)
+playText.Size = UDim2.new(1, 0, 0, 40)
+playText.Position = UDim2.new(0, 0, 0.5, -20)
+playText.BackgroundTransparency = 1
+playText.Parent = innerFrame
+
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = button
+
+local innerCorner = Instance.new("UICorner")
+innerCorner.CornerRadius = UDim.new(0, 8)
+innerCorner.Parent = innerFrame
+
+button.MouseEnter:Connect(function()
+	TweenService:Create(gradient, TweenInfo.new(0.3), {Rotation = 270}):Play()
+	TweenService:Create(stroke, TweenInfo.new(0.3), {Thickness = 5}):Play()
+end)
+
+button.MouseLeave:Connect(function()
+	TweenService:Create(gradient, TweenInfo.new(0.3), {Rotation = 90}):Play()
+	TweenService:Create(stroke, TweenInfo.new(0.3), {Thickness = 3}):Play()
+end)
+
+
+button.MouseButton1Down:Connect(function()
+	TweenService:Create(button, TweenInfo.new(0.1), {Size = UDim2.new(0, 290, 0, 115)}):Play()
+end)
+
+button.MouseButton1Up:Connect(function()
+	TweenService:Create(button, TweenInfo.new(0.1), {Size = UDim2.new(0, 300, 0, 120)}):Play()
+end)
+
+
+button.MouseButton1Click:Connect(function()
+	print("Play button clicked!")
+	-- Add your game start logic here
+end)
