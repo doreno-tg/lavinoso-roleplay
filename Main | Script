@@ -1,0 +1,1040 @@
+local Events = game.ReplicatedStorage.Events
+
+workspace.Retargeting = Enum.AnimatorRetargetingMode.Disabled
+
+--local DoorHandler = require(game.ServerScriptService.DoorHandler)
+
+local AnimationHandler = require(game.ReplicatedStorage.AnimationHandler)
+
+local WaypointHandler = require(game.ServerScriptService.WaypointHandler)
+
+local WantedHandler = require(game.ServerScriptService.WantedHandler)
+
+local AvatarModule = require(game.ServerScriptService.AvatarModule)
+
+local WaypointsList = require(game.ServerScriptService.WaypointsList)
+
+local ReplicationValues = require(game.ReplicatedStorage.ReplicationValues)
+
+local NPCClass = require(game.ServerScriptService.NPCClass)
+
+local TrafficHandler = require(game.ServerScriptService.TrafficHandler)
+
+local VehicleClass = require(game.ServerScriptService.VehicleClass)
+
+local VehicleGroups = require(game.ServerScriptService.VehicleGroups)
+
+local RunService = game:GetService("RunService")
+
+_G.BackupClothing = {
+	Shirt = 10248084,
+	Pants = 382537569,
+}
+
+local EquipmentHandler = require(game.ServerScriptService.EquipmentHandler)
+
+local VehicleList = require(game.ReplicatedStorage.VehicleList)
+
+local RadioStations = require(game.ReplicatedStorage.RadioStations)
+
+local AttentionModule = require(game.ServerScriptService.AttentionModule)
+
+local AmbientSpawnsHandler = require(game.ServerScriptService.AmbientSpawnsHandler)
+
+local RadioHandler = require(game.ServerScriptService.RadioHandler)
+
+local Dispatch = require(game.ServerScriptService.Dispatch)
+
+local SharedVehicleModule = require(game.ReplicatedStorage.SharedVehicleModule)
+
+local VehicleHandler = require(game.ServerScriptService.VehicleHandler)
+
+local InsertService = game:GetService("InsertService")
+
+local PedModels = require(game.ReplicatedStorage.PedModels)
+
+local ItemList = require(game.ReplicatedStorage.ItemList)
+
+local CollectionService = game:GetService("CollectionService")
+
+local BuildRagdoll = require(game.ReplicatedStorage:WaitForChild("buildRagdoll"))
+
+local GeneralFunctions = require(game.ReplicatedStorage.GeneralFunctions)
+
+local NPCHandler = require(game.ServerScriptService.NPCHandler)
+
+local GunFunctions = require(game.ReplicatedStorage.GunFunctions)
+
+local GunModule = require(game.ServerScriptService.GunModule)
+
+local CollisionHandler = require(game.ReplicatedStorage.CollisionHandler)
+
+workspace.PersistentLoaded:Connect(function(Player)
+	warn(Player)
+end)
+
+local IKControlList = require(game.ServerScriptService.IKControlList)
+
+local BaseCombatNPC = game.ServerStorage.CombatNPC
+
+for ControlName, Properties in pairs(IKControlList) do
+	local Control = Instance.new("IKControl")
+
+	Control.Name = ControlName
+
+	for Property, Value in pairs(Properties) do
+		if type(Value) == "string" then
+			Value = BaseCombatNPC:FindFirstChild(Value)
+		end
+
+		Control[Property] = Value
+	end
+
+	Control.Parent = BaseCombatNPC.IKControls
+end
+
+CollectionService:AddTag(workspace.TemporaryIgnore, "GunIgnore")
+
+game.Players.PlayerAdded:Connect(function(Player)
+	
+	ReplicationValues.PlayerValues[Player.Name] = GeneralFunctions:CopyDictionary(ReplicationValues.Values)
+	
+	--for Vehicle, _ in pairs(VehicleClass.Vehicles) do	
+	--	Vehicle:AddPersistentPlayer(Player)
+	--end
+	
+	Player.CharacterAdded:Connect(function()
+		
+		task.wait()
+		
+		local Character = Player.Character
+
+		local Folder = Instance.new("Folder")
+
+		Folder.Name = "CollisionParts"
+
+		Folder.Parent = Character
+
+		for _, Part in pairs(game.ServerStorage.CombatNPC:GetChildren()) do
+			if Part:IsA("BasePart") and Part.Name ~= "HumanoidRootPart" then
+				local Clone = Part:Clone()
+
+				local CharacterPart = Character:WaitForChild(Clone.Name)
+
+				local Weld = Instance.new("WeldConstraint")
+
+				Clone:ClearAllChildren()
+
+				Weld.Part0 = CharacterPart
+
+				Weld.Part1 = Clone
+
+				Weld.Parent = Clone
+
+				--Clone.Massless = true
+
+				Clone.CanCollide = false
+
+				Clone.Transparency = 1
+
+				CharacterPart.CanCollide = false
+
+				CharacterPart.CanQuery = false
+
+				Clone.CFrame = CharacterPart.CFrame
+
+				Clone.Parent = Folder
+			end
+		end
+		
+		local IKControlFolder = Instance.new("Folder")
+		
+		IKControlFolder.Name = "IKControls"
+		
+		IKControlFolder.Parent = Character
+		
+		for ControlName, Properties in pairs(IKControlList) do
+			local Control = Instance.new("IKControl")
+			
+			Control.Name = ControlName
+			
+			for Property, Value in pairs(Properties) do
+				if type(Value) == "string" then
+					Value = Character:FindFirstChild(Value)
+				end
+				
+				Control[Property] = Value
+			end
+			
+			Control.Parent = IKControlFolder
+		end
+		
+		Character.Head.face:Destroy()
+		
+		for _, Decal in pairs(script.FaceComponents:GetChildren()) do
+			Decal:Clone().Parent = Character.Head
+		end
+		
+		AvatarModule:ChangeGender(Character, "M", "M")
+		
+		for _, Part in pairs(Character:GetDescendants()) do
+			if Part:IsA("BasePart") and Part ~= Character.PrimaryPart then
+				Part.Massless = true
+			end
+		end
+		
+		Character.PrimaryPart.CustomPhysicalProperties = PhysicalProperties.new(0.01)
+
+		local RotForce = game.ServerStorage.RotForce:Clone()
+
+		local Humanoid = Character:WaitForChild("Humanoid")
+
+		BuildRagdoll(Humanoid)
+		
+		game.ServerStorage.ItemStorage.COMBATPISTOL:Clone().Parent = Player.Backpack
+		
+		game.ServerStorage.ItemStorage.PISTOL:Clone().Parent = Player.Backpack
+
+		RotForce.Parent = Character.PrimaryPart
+
+		RotForce.Attachment0 = Character.PrimaryPart.RootRigAttachment
+
+		CollectionService:AddTag(Character, "Character")
+
+		for _, Accessory in pairs(Character:GetChildren()) do
+			if Accessory:IsA("Accessory") then
+				CollectionService:AddTag(Accessory, "GunIgnore")
+			end
+		end
+
+		CollectionService:AddTag(Character, "Combatant")
+
+		CollectionService:AddTag(Character.HumanoidRootPart, "Obstacle")
+
+		Character.HumanoidRootPart.CanQuery = false
+
+		CollisionHandler:SetModelCollisionGroup(Character, "Players")
+
+		Humanoid.Died:Connect(function()
+			
+			warn("Player has died")
+			
+			Humanoid:UnequipTools()
+
+			Player.Backpack:ClearAllChildren()
+			
+			CollisionHandler:SetModelCollisionGroup(Character, "Corpses")
+		end)
+
+		Character.Parent = workspace.PlayerCharacters
+	end)
+end)
+
+game.Players.PlayerRemoving:Connect(function(Player)
+	ReplicationValues.PlayerValues[Player.Name] = nil
+end)
+
+Events.DropTool.OnServerEvent:Connect(function(Player, Tool)
+	if not Tool:IsA("Tool") or (not Tool:IsDescendantOf(Player.Character) and not Tool:IsDescendantOf(Player.Backpack)) then
+		return
+	end
+	
+	EquipmentHandler:DropTool(Tool, Player.Character.RightHand.Position)
+end)
+
+Events.SendVehicleClass.OnServerInvoke = function(Player, VehicleModel)
+	if VehicleModel then
+		return VehicleClass.GetVehicleClass(VehicleModel)
+	else
+		--for Vehicle, _ in pairs(VehicleClass.Vehicles) do
+		--	Vehicle:RemovePersistentPlayer(Player)
+		--end
+
+		return VehicleClass.Vehicles
+	end
+end
+
+for _, Object in pairs(workspace:GetDescendants()) do
+	
+	if Object.Name == "PromptInfo" then
+		CollectionService:AddTag(Object, "PromptInfos")
+		Object.Name = Object.PromptName.Value
+	elseif Object.Name == "Obstacle" then
+		CollectionService:AddTag(Object, "Obstacle")
+	elseif Object.Name == "Door" then
+		
+		
+		Object.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		
+		CollectionService:AddTag(Object, "Door")
+		--DoorHandler:InitiateDoor(Object)
+	end
+end
+
+CollisionHandler:SetModelCollisionGroup(game.ReplicatedStorage.DoorModels, "DoorPanels")
+
+GeneralFunctions:CreateCluster()
+
+TrafficHandler:Initiate()
+
+CollisionHandler:SetModelCollisionGroup(workspace.Props, "MapParts")
+
+CollisionHandler:SetModelCollisionGroup(workspace.Roads, "Roads")
+
+CollisionHandler:SetModelCollisionGroup(workspace.Buildings, "Buildings")
+
+spawn(function()
+	
+	for _, Part in pairs(workspace:GetDescendants()) do
+		if Part.Name == "GunIgnore" then
+			CollectionService:AddTag(Part, "GunIgnore")
+		elseif Part.Name == "RadioSound" then
+			CollectionService:AddTag(Part, "RadioSounds")
+		end
+	end
+
+	
+	for _, Part in pairs(workspace.CoverParts:GetChildren()) do
+		GeneralFunctions:BuildCover(Part)
+	end
+
+	for _, Part in pairs(workspace.Buildings:GetDescendants()) do
+		if Part.Name == "ExteriorWall" then
+			GeneralFunctions:BuildCover(Part)
+		end
+	end
+	
+	for _, Model in pairs(workspace.Props:GetChildren()) do
+		if Model:IsA("Model") and Model.PrimaryPart then
+			GeneralFunctions:BuildCover(Model.PrimaryPart)
+		end
+	end
+	
+	for _, Model in pairs(workspace.Vegetation:GetChildren()) do
+
+		local CoverBase = Model:FindFirstChild("CoverBase")
+
+		if CoverBase then
+			GeneralFunctions:BuildCover(CoverBase)
+
+			CoverBase:Destroy()
+		end
+	end
+	
+	for _, Cluster in pairs(workspace.CoverClusters:GetChildren()) do
+		if #Cluster:GetChildren() == 0 then
+			Cluster:Destroy()
+		end
+	end
+end)
+
+for _, Asset in pairs(game.ServerStorage.ClothingAssets:GetChildren()) do
+	if Asset:IsA("Accessory") then
+		for _, Part in pairs(Asset:GetDescendants()) do
+			if Part:IsA("BasePart") then
+				local Weld = Instance.new("WeldConstraint")
+				
+				Weld.Part0 = Asset.Handle
+				
+				Weld.Part1 = Part
+				
+				Weld.Parent = Asset.Handle
+				
+				if Part.Name ~= "Armor" then
+					Part.CanQuery = false
+					
+					Part.CanTouch = false
+				end
+			end
+		end
+	end
+end
+
+function _G.LoadAsset(AssetId)
+	
+	if game.ServerStorage.ClothingAssets:FindFirstChild(AssetId) or AssetId == 0 then
+		return
+	end
+	
+	local ParentModel = nil
+	
+	local Success, Error = pcall(function()
+		ParentModel = InsertService:LoadAsset(AssetId)
+	end)
+	
+	if not ParentModel then
+		warn("Couldn't load asset with Id ".. AssetId)
+		return
+	end
+
+	for _, Object in pairs(ParentModel:GetChildren()) do
+		Object.Name = AssetId
+		
+		--CollectionService:AddTag(Object, "GunIgnore")
+		
+		for _, Part in pairs(Object:GetDescendants()) do
+			if Part:IsA("BasePart") then
+				Part.CanCollide = false
+				Part.CanQuery = false
+			end
+		end
+
+		Object.Parent = game.ServerStorage.ClothingAssets
+		
+		
+		
+		ParentModel:Destroy()
+		
+		return Object
+	end
+end
+
+for _, Vehicle in pairs(game.ServerStorage.VehicleStorage:GetChildren()) do
+	
+	CollisionHandler:SetModelCollisionGroup(Vehicle.Body, "VehicleBodies")
+	
+	CollisionHandler:SetModelCollisionGroup(Vehicle.Chassis, "VehicleChassis")
+	
+	VehicleHandler:InitiateVehicle(Vehicle)
+end
+
+Events.EmitAttention.Event:Connect(function(...)
+	AttentionModule:EmitAttention(...)
+end)
+
+local PhysicalWaypoints = workspace.Paths.VehiclePaths:GetChildren()
+
+for Index, Waypoint in pairs(PhysicalWaypoints) do
+	local SettingTable = {
+		Position = Waypoint.Position,
+		NextPoints = {},
+		PreviousPoints = {},
+		MaxSpeed = Waypoint.MaxSpeed.Value,
+		Tags = {},
+		Occupants = {},
+	}
+
+	for _, PreviousWaypoint in pairs(Waypoint.PreviousPoints:GetChildren()) do
+		local PhysicalIndex = table.find(PhysicalWaypoints, PreviousWaypoint.Value)
+
+		table.insert(SettingTable.PreviousPoints, PhysicalIndex)
+	end
+	
+	local PointsToYieldFolder = Waypoint:FindFirstChild("PointsToYield")
+	
+	if PointsToYieldFolder then
+		SettingTable.PointsToYield = {}
+		
+		for _, WaypointValue in pairs(PointsToYieldFolder:GetChildren()) do
+			table.insert(SettingTable.PointsToYield, table.find(PhysicalWaypoints, WaypointValue.Value))
+		end
+	end
+	
+	for _, NextWaypointValue in pairs(Waypoint:GetChildren()) do
+		if NextWaypointValue:IsA("Beam") then
+			if NextWaypointValue.Attachment1 and NextWaypointValue.Attachment1.Parent ~= nil then
+				local PhysicalIndex = table.find(PhysicalWaypoints, NextWaypointValue.Attachment1.Parent)
+
+				table.insert(SettingTable.NextPoints, PhysicalIndex)
+			end
+		end
+	end
+	
+	for _, TagValue in pairs(Waypoint.Tags:GetChildren()) do
+		table.insert(SettingTable.Tags, TagValue.Name)
+	end
+	
+	WaypointsList.VehiclePaths[Index] = SettingTable
+end
+
+PhysicalWaypoints = nil
+
+local PhysicalParkings = workspace.Paths.VehicleParkings:GetChildren()
+
+for Index, Parking in pairs(PhysicalParkings) do
+	local SettingTable = {
+		CFrame = Parking.CFrame - Parking.CFrame.UpVector * 0.25,
+		VehicleGroup = Parking.VehicleGroup.Value,
+		FaceBothWays = Parking.FaceBothWays.Value,
+	}
+	
+	WaypointsList.VehicleParkings[Index] = SettingTable
+end
+
+workspace.Paths:Destroy()
+
+workspace.AreaPoints:Destroy()
+
+for Station, StationInfo in pairs(RadioStations) do
+	local Folder = Instance.new("Folder")
+	
+	Folder.Name = Station
+	
+	local SongCount = 0
+	
+	Folder.Parent = game.ServerStorage.CollectedMusic
+	
+	for _, AudioInfo in pairs(StationInfo.Audios) do
+		local Sound = Instance.new("Sound")
+		
+		Sound.SoundId = "rbxassetid://" .. AudioInfo.Id
+		
+		Sound.Name = AudioInfo.DisplayName
+		
+		Sound.Parent = Folder
+		
+		SongCount = SongCount + 1
+	end
+	
+	local Sound = Instance.new("Sound")
+	
+	Sound.Name = Station
+	
+	Sound.Volume = 0
+	
+	Sound.Parent = game.ServerStorage.StationSongs
+end
+
+AmbientSpawnsHandler:SpawnAmbientVehicleParked("CALVANA")
+
+for _, Tool in pairs(game.ServerStorage.ItemStorage:GetChildren()) do
+	
+	local ItemInfo = ItemList[Tool.Name]
+
+	GeneralFunctions:CreateHitbox(Tool)
+	
+	if ItemInfo.DataType == "Ranged" then
+		local GunController = script.GunController:Clone()
+
+		GunController.Parent = Tool
+
+		GunFunctions.WeldTool(Tool)
+
+		local SoundGroup = script.GunReverbGroup:Clone()
+		
+		local FireSound = Tool.Handle.Shot
+		
+		SoundGroup.Parent = FireSound
+		
+		FireSound.SoundGroup = SoundGroup
+	end
+	
+	for _, Part in pairs(Tool:GetDescendants()) do
+		if Part:IsA("BasePart") then
+			Part.CanCollide = false
+			Part.CanQuery = false
+		end
+	end
+	
+	local ToolIndexValue = Instance.new("NumberValue")
+
+	ToolIndexValue.Name = "BackpackIndex"
+
+	ToolIndexValue.Parent = Tool
+end
+
+Events.UpdateReplicationValues.OnServerEvent:Connect(function(Player, Values)
+	for ValueName, Value in pairs(Values) do
+		
+		if ReplicationValues.Values[ValueName] ~= nil then
+			ReplicationValues.PlayerValues[Player.Name][ValueName] = Value
+		else
+			
+			warn(ValueName)
+			
+			Player:Kick()
+			break
+		end
+	end
+end)
+
+spawn(function()
+	while true do
+		task.wait(0.1)
+		
+		Events.UpdateReplicationValues:FireAllClients(ReplicationValues.PlayerValues)
+	end
+end)
+
+Events.GunInteraction.OnServerEvent:Connect(function(Player, Command, ...)
+	if Command == "FireGun" then
+		GunModule:OnGunFired(Player, ...)
+	elseif Command == "ReloadGun" then
+		GunModule:ReloadGun(Player)
+	end
+end)
+
+--Events.Interaction.OnServerEvent:Connect(function(Player, PromptInfo, Option)
+	
+--	if PromptInfo.Name == "DoorPrompt" then
+--		if Option == "Open" or Option == "Close" then
+--			DoorHandler:ToggleDoorByPlayer(PromptInfo.Parent, not PromptInfo.Parent.Properties.IsOpen.Value)
+--		end
+		
+--	end
+--end)
+
+Events.SetVehicleLightsEnabled.Event:Connect(function(Vehicle, GroupName, IsEnabled)
+	
+	local VehicleInstance = VehicleClass.GetVehicleClass(Vehicle)
+	
+	VehicleInstance:ProcessLightToggle(nil, GroupName, IsEnabled)
+end)
+
+Events.VehicleInteraction.OnServerEvent:Connect(function(Player, Command, ...)
+	
+	local SeatPart = Player.Character.Humanoid.SeatPart
+	
+	local VehicleInstance = nil
+	
+	local Vehicle = SharedVehicleModule:GetVehicleFromObject(SeatPart)
+	
+	if Vehicle then
+		VehicleInstance = VehicleClass.GetVehicleClass(Vehicle)
+		
+		if not VehicleInstance then
+			return
+		end
+	end
+	
+	if Command == "EnterVehicle" then
+		VehicleInstance:EnterVehicle(Player.Character, ...)
+	elseif Command == "ExitVehicle" then
+		VehicleInstance:ExitVehicle(Player.Character, ...)
+	elseif Command == "ChangeRadioStation" then
+		
+		
+		
+		local Vehicle = SharedVehicleModule:GetVehicleFromObject(SeatPart)
+		
+		if not Vehicle or SeatPart ~= Vehicle.Seats.Seat1 then
+			return
+		end
+		
+		RadioHandler:SetSoundToStation(Vehicle.PrimaryPart.RadioSound, ...)
+	elseif Command == "StartEngine" then
+		
+		local Vehicle = SharedVehicleModule:GetVehicleFromObject(SeatPart)
+		
+		if not Vehicle then
+			return
+		end
+		
+		VehicleInstance:ToggleEngine(true)
+	elseif Command == "ToggleLightGroup" then
+		
+		VehicleInstance:ProcessLightToggle(Player, ...)
+	elseif Command == "ToggleHorn" then
+		if not Vehicle or SeatPart ~= Vehicle.Seats.Seat1 then
+			return
+		end
+		
+		VehicleInstance:ToggleHorn(Player, ...)
+	elseif Command == "CloseAllDoors" then
+		if not Vehicle or SeatPart ~= Vehicle.Seats.Seat1 then
+			return
+		end
+		
+		VehicleInstance:CloseAllDoors()
+	elseif Command == "ToggleConvertibleRoof" then
+		if not Vehicle or SeatPart ~= Vehicle.Seats.Seat1 then
+			return
+		end
+		
+		VehicleInstance:ToggleConvertibleRoof(not VehicleInstance.ConvertibleRoofOpen)
+	elseif Command == "HitByVehicle" then
+		local Vehicle = ...
+		
+		local OccupantHumanoid = Vehicle.Seats.Seat1.Occupant
+		
+		if OccupantHumanoid then
+			local Character = OccupantHumanoid.Parent
+			
+			if Character.Parent == workspace.NPCs then
+				local NPCInstance = NPCClass.GetNPCClass(Character)
+				
+				if not NPCInstance then
+					return
+				end
+				
+				if NPCInstance.Task == "VehicleRoaming" then
+					
+					NPCInstance.CurrentTarget = Player.Character
+					
+					NPCInstance:ChangeMode("StopHitPlayerWithCar")
+				end
+			end
+		end
+	end
+end)
+
+for _, Accessory in pairs(game.ServerStorage.ClothingAssets:GetChildren()) do
+	
+	if tonumber(Accessory.Name) then
+		CollectionService:AddTag(Accessory, "GunIgnore")
+	else
+		local MainModel = Accessory:FindFirstChild("MainModel")
+
+		if MainModel then
+			CollectionService:AddTag(MainModel, "GunIgnore")
+		end
+
+		for _, Object in pairs(Accessory:GetDescendants()) do
+
+			if Object:IsA("BasePart") then
+				local Weld = Instance.new("WeldConstraint")
+
+				Weld.Part0 = Accessory.Handle
+
+				Weld.Part1 = Object
+
+				Weld.Parent = Accessory.Handle
+
+				Object.Anchored = false
+			end
+		end
+	end
+end
+
+Events.UpdateMouse.OnServerEvent:Connect(function(Player, MousePosition, IsAiming)
+	Player.Character.Properties.MousePosition.Value = MousePosition
+	
+	Player.Character.Properties.IsAiming.Value = IsAiming
+end)
+
+workspace.NPCs.ChildAdded:Connect(function(NPC)
+	
+	local Humanoid = NPC:WaitForChild("Humanoid")
+	
+	AnimationHandler:LoadHumanoid(Humanoid)
+end)
+
+RadioHandler:Initiate()
+
+local DaytimeValue = game.ReplicatedStorage.Daytime
+
+task.spawn(function()
+	while true do
+		task.wait(2)
+		
+		if DaytimeValue.Value == 1440 then
+			DaytimeValue.Value = 0
+		else 
+			DaytimeValue.Value += 1
+		end
+	end
+end)
+
+_G.ServerHeartbeat = 0
+
+task.spawn(function()
+	local CountedHeartbeats = 0
+	
+	RunService.Heartbeat:Connect(function()
+		CountedHeartbeats += 1
+	end)
+	
+	while true do
+		CountedHeartbeats = 0
+		
+		task.wait(1)
+		
+		_G.ServerHeartbeat = CountedHeartbeats
+	end
+end)
+
+spawn(function()
+	while true do
+		wait(5)
+		
+		local Success, Error = pcall(function()
+			for _, Character in pairs(CollectionService:GetTagged("Character")) do
+
+				local WantedLevel = Character.Properties.WantedLevel.Value
+
+				if WantedLevel > 0 then
+					local TimeDispatchedInst = Character.Properties.TimeDispatchedTo
+
+					local WantedLevelInfo = Dispatch.ResponseSpawns["WantedLevel" .. WantedLevel]
+
+					local EngagedCopCount = 0
+
+					for _, NPC in pairs(workspace.NPCs:GetChildren()) do
+						if NPC.Properties.Team.Value == "Police" then
+							
+							local NPCInstance = NPCClass.GetNPCClass(NPC)
+							
+							if NPCInstance.Targets[Character] then
+								
+								EngagedCopCount = EngagedCopCount + 1
+							end
+						end
+					end
+
+					if WantedLevelInfo.MaxResponsePeds > EngagedCopCount and os.time() - TimeDispatchedInst.Value > WantedLevelInfo.ResponseTime then
+						local DispatchVehicleName = WantedLevelInfo.DispatchVehicles[math.random(1, #WantedLevelInfo.DispatchVehicles)]
+
+						local DispatchVehicleInfo = Dispatch.DispatchVehicles[DispatchVehicleName]
+
+						-- SpawnVehicle here
+
+						local Vehicle, VehicleInstance, NPCs = AmbientSpawnsHandler:SpawnOccupiedVehicleWithPedGroups(DispatchVehicleInfo.Vehicles[math.random(1, #DispatchVehicleInfo.Vehicles)], DispatchVehicleInfo.Occupants)
+						local OriginWaypoint = WaypointHandler:GetRandomWaypointInRange(Character.PrimaryPart.Position, 0, 100, true)
+						
+						local WaypointIndex = AmbientSpawnsHandler:GetRandomPointConnectedToPoint(OriginWaypoint, 500, true)
+						
+						local WaypointInfo = WaypointsList.VehiclePaths[WaypointIndex]
+						
+						local NextWaypointIndex = WaypointInfo.NextPoints[1]
+
+						local NewCFrame = CFrame.lookAt(WaypointsList.VehiclePaths[WaypointIndex].Position, WaypointsList.VehiclePaths[NextWaypointIndex].Position) 
+
+						VehicleInstance:PivotTo(NewCFrame)
+						
+						VehicleInstance:SetNetworkOwnerOfVehicle()
+
+						local DriverNPCInstance = NPCClass.GetNPCClass(NPCs[1])
+
+						DriverNPCInstance:SetCurrentVehicleWaypoint(NextWaypointIndex)
+						
+						VehicleInstance:SetNetworkOwnerOfVehicle()
+
+						for _, NPC in pairs(NPCs) do
+							NPC.Controller.Enabled = true
+							
+							WantedHandler:UpdatePoliceNPC(NPC)
+						end
+
+						local VelocityToSet = NewCFrame.LookVector * WaypointInfo.MaxSpeed
+
+						Vehicle.PrimaryPart.Velocity = NewCFrame.LookVector * WaypointInfo.MaxSpeed
+						
+						TimeDispatchedInst.Value = os.time()
+					end
+				end
+			end
+
+			--for _, NPC in pairs(workspace.NPCs:GetChildren()) do
+				
+			--	local NPCInstance = NPCClass.GetNPCClass(NPC)
+				
+			--	if NPCInstance.Mode == "VehicleRoaming" then
+			--		local IsSeen = false
+
+			--		for _, Character in pairs(CollectionService:GetTagged("Character")) do
+			--			if (Character.Head.Position - NPC.Head.Position).Magnitude < 300 then
+			--				IsSeen = true
+			--				break
+			--			end
+			--		end
+
+			--		if not IsSeen then
+			--			--NPC:Destroy()
+
+			--			 --warn("Destroyed ".. NPC.Name)
+			--		end
+			--	end
+			--end
+
+
+
+			for _, Vehicle in pairs(workspace.Vehicles:GetChildren()) do
+				if not Vehicle.InfoFolder.NoDespawn.Value then
+					local IsSeen = false
+
+					for _, Character in pairs(CollectionService:GetTagged("Character")) do
+						
+						local CharacterPosition = Character.Head.Position
+						
+						local Direction = (Vehicle.PrimaryPart.Position - CharacterPosition)
+
+						local Distance = Direction.Magnitude
+
+						if Distance < 200 then
+							IsSeen = true
+							break
+						elseif (Vehicle.PrimaryPart.Velocity:Dot(Direction) < 0 or ReplicationValues.PlayerValues[Character.Name].CameraLookVector:Dot(Direction.Unit) > 0.2) and Distance < 600 then
+							IsSeen = true
+							break
+						end
+					end
+
+					if not IsSeen then
+
+						local DoDestroy = true
+						
+						local Occupants = {}
+
+						for _, Seat in pairs(Vehicle.Seats:GetChildren()) do
+							if Seat.Occupant then
+								
+								table.insert(Occupants, Seat.Occupant.Parent)
+								
+								local NPCInstance = NPCClass.GetNPCClass(Seat.Occupant.Parent)
+								
+								if NPCInstance then
+									if NPCInstance.Task ~= "VehicleRoaming" and NPCInstance.Task ~= "Idling" then
+										DoDestroy = false
+									end
+								end
+							end
+						end
+
+						if DoDestroy then
+							Vehicle:Destroy()
+							
+							for _, Occupant in pairs(Occupants) do
+								Occupant:Destroy()
+							end
+						end
+					end
+				end
+			end
+		end)
+		
+		if Error then
+			warn(Error)
+		end
+	end
+end)
+for _, Door in pairs(CollectionService:GetTagged("Door")) do
+	CollisionHandler:SetModelCollisionGroup(Door, "DoorPanels")
+end
+
+for _, Cover in pairs(CollectionService:GetTagged("CoverAttachment")) do
+	CollectionService:RemoveTag(Cover, "CoverAttachment")
+end
+
+-- idea to find waypoint : get waypoints closest to player (in an area) and get its previous/following waypoints until distance from all players big enough
+
+local VehiclesToSpawn = {"HAMPER", "HAMPER", "HAMPER2", "DOMAIN", "VULTURE", "VULTURE", "DEVIL", "STOWER", "AGGRAND", "FAMMAN", "CALVANA"}
+
+function SpawnParkedVehicleToCharacter(Character)
+	
+	if Character.Parent == nil or Character.PrimaryPart == nil then
+		return
+	end
+	
+	local ParkingIndex = AmbientSpawnsHandler:GetRandomParkingSpotInArea(Character.PrimaryPart.Position, 250, 500)
+	
+	if not ParkingIndex then
+		return false
+	end
+	
+	local Vehicle, VehicleInstance = AmbientSpawnsHandler:SpawnAmbientVehicleParked(VehicleGroups.HoodCars[math.random(1, #VehicleGroups.HoodCars)])
+	
+	Vehicle.InfoFolder.NoDespawn.Value = true
+	
+	local ParkingInfo = WaypointsList.VehicleParkings[ParkingIndex]
+	
+	local ParkingCFrame = ParkingInfo.CFrame
+	
+	if ParkingInfo.FaceBothWays then
+		ParkingCFrame = ParkingCFrame * CFrame.Angles(0, math.random(0, 1) * math.pi, 0)
+	end
+	
+	local RandomAngle = Random.new()
+	
+	ParkingCFrame = ParkingCFrame * CFrame.Angles(0, RandomAngle:NextNumber(-0.1, 0.1), 0)
+	
+	VehicleInstance:PivotTo(ParkingCFrame)
+	
+	task.delay(2, function()
+		Vehicle.InfoFolder.NoDespawn.Value = false
+	end)
+	
+	return true
+end
+
+function SpawnVehicleToCharacter(Character)
+	local WantedLevel = Character.Properties.WantedLevel.Value
+
+	if WantedLevel < 3 then
+		local Vehicle, VehicleInstance, NPCs = AmbientSpawnsHandler:SpawnRandomOccupiedVehicle(VehiclesToSpawn[math.random(1, #VehiclesToSpawn)], "HoodCivilians")
+
+		Vehicle.InfoFolder.NoDespawn.Value = true
+
+		local OriginWaypoint = WaypointHandler:GetRandomWaypointInRange(Character.PrimaryPart.Position, 0, 100, true)
+
+		if not OriginWaypoint then
+			Vehicle:Destroy()
+
+			for _, NPC in pairs(NPCs) do
+				NPC:Destroy()
+			end
+
+			return
+		end
+
+		local WaypointIndex = AmbientSpawnsHandler:GetRandomPointConnectedToPoint(OriginWaypoint, 400, math.random(0,1) == 1)
+
+		local WaypointInfo = WaypointsList.VehiclePaths[WaypointIndex]
+
+		local NextWaypointIndex = WaypointInfo.NextPoints[1]
+
+		local NewCFrame = CFrame.lookAt(WaypointsList.VehiclePaths[WaypointIndex].Position, WaypointsList.VehiclePaths[NextWaypointIndex].Position) 
+
+		VehicleInstance:PivotTo(NewCFrame)
+
+		VehicleInstance:SetNetworkOwnerOfVehicle()
+
+		local DriverNPCInstance = NPCClass.GetNPCClass(NPCs[1])
+
+		DriverNPCInstance:SetCurrentVehicleWaypoint(NextWaypointIndex)
+
+		for _, NPC in pairs(NPCs) do
+			NPC.Controller.Enabled = true
+		end
+
+		local VelocityToSet = NewCFrame.LookVector * WaypointInfo.MaxSpeed
+
+		Vehicle.PrimaryPart.Velocity = NewCFrame.LookVector * WaypointInfo.MaxSpeed
+
+		task.delay(2, function()
+			Vehicle.InfoFolder.NoDespawn.Value = false
+		end)
+	end
+end
+
+task.spawn(function()
+	while true do
+		
+		local VehicleCount
+		
+		if game.ReplicatedStorage.SpawnCars.Value then
+			if _G.ServerHeartbeat >= 56 then
+				
+				local ParkedVehicleCount = 0
+				
+				for _, Vehicle in pairs(workspace.Vehicles:GetChildren()) do
+					if not Vehicle.Seats.Seat1.Occupant then
+						ParkedVehicleCount += 1
+					end
+				end
+				
+				local PlayerCount = #game.Players:GetPlayers()
+				
+				
+				
+				for _, Character in pairs(CollectionService:GetTagged("Character")) do
+					
+					if ParkedVehicleCount <= 13 then
+						local SpawnedSuccessfully = SpawnParkedVehicleToCharacter(Character)
+						
+						if SpawnedSuccessfully then
+							ParkedVehicleCount += 1
+						end
+					end
+					
+					if PlayerCount == 1 then
+						SpawnVehicleToCharacter(Character)
+					end
+				end
+			end
+
+			task.wait()
+		else
+			task.wait(1)
+		end
+	end
+end)
