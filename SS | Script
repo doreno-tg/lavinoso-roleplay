@@ -1,0 +1,59 @@
+local Humanoid = game.Players.LocalPlayer.Character.Humanoid
+
+local Seat = Humanoid.SeatPart
+
+local Events = game.ReplicatedStorage.Events
+
+local UserInputService = game:GetService("UserInputService")
+
+local ContextActionService = game:GetService("ContextActionService")
+
+function DeleteScript()
+	ContextActionService:UnbindAction("ExitVehicle")
+	ContextActionService:UnbindAction("SpaceLock")
+	script:Destroy()
+end
+
+Seat.AncestryChanged:Connect(function()
+	if Seat.Parent == nil then
+		DeleteScript()
+	end
+end)
+
+Humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+	if Humanoid.SeatPart ~= Seat then
+		DeleteScript()
+	end
+end)
+
+if Seat:IsA("Seat") then
+	ContextActionService:BindActionAtPriority("SpaceLock", function()
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.ContextActionPriority.High.Value, Enum.PlayerActions.CharacterJump)
+end
+
+ContextActionService:BindAction("ExitVehicle", function(ActionName, InputState, InputObject)
+
+	if InputState == Enum.UserInputState.Begin then
+
+		local LastExitVehicleKeyBegin = tick()
+
+		local PressTimeSpan = 0
+
+		Events.OnVehicleExitPrompted:Fire()
+
+		repeat
+			task.wait()
+			PressTimeSpan = tick() - LastExitVehicleKeyBegin
+		until not UserInputService:IsKeyDown(InputObject.KeyCode) or PressTimeSpan >= 0.5
+		
+		if Seat:IsA("VehicleSeat") then
+			repeat
+				task.wait()
+			until Seat.Velocity.Magnitude < 3
+		end
+
+		Events.VehicleInteraction:FireServer("ExitVehicle", PressTimeSpan < 0.5)
+	end
+end
+, false, Enum.KeyCode.E)
