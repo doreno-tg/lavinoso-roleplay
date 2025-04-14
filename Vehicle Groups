@@ -1,0 +1,1266 @@
+local VehicleClass = {}
+
+local Events = game.ReplicatedStorage.Events
+
+local GeneralFunctions = require(game.ReplicatedStorage.GeneralFunctions)
+
+local WaypointsList = require(game.ServerScriptService.WaypointsList)
+
+local SharedVehicleModule = require(game.ReplicatedStorage.SharedVehicleModule)
+
+local CollisionHandler = require(game.ReplicatedStorage.CollisionHandler)
+
+local AssetsFolder = script.Parent.VehicleHandler.Assets
+
+local RadioHandler = require(game.ServerScriptService.RadioHandler)
+
+local ExplosionHandler = require(game.ReplicatedStorage.ExplosionHandler)
+
+local AnimationExtras = require(game.ReplicatedStorage.AnimationExtras)
+
+local AnimationHandler = require(game.ReplicatedStorage.AnimationHandler)
+
+local VehicleList = require(game.ReplicatedStorage.VehicleList)
+
+local VehicleSeating = require(game.ReplicatedStorage.VehicleSeating)
+
+local ReplicationValues = require(game.ReplicatedStorage.ReplicationValues)
+
+local Debris = game:GetService("Debris")
+
+local TweenService = game:GetService("TweenService")
+
+VehicleClass.__index = VehicleClass
+
+VehicleClass.Vehicles = {}
+
+function VehicleClass.new(Vehicle)
+	
+	local VehicleInfo = VehicleList[Vehicle.Name]
+	
+	local self = setmetatable({},VehicleClass)
+	
+	VehicleClass.Vehicles[Vehicle] = self
+	
+	self.Stats = {
+		PaintColor = VehicleInfo.Ambient.SpawnColors[1],
+		Health = VehicleInfo.Properties.Health,
+		Fuel = VehicleInfo.Properties.MaxFuelVolume,
+		LicensePlate = "",
+		DirtLevel = 0,
+	}
+	
+	self.Vehicle = Vehicle
+	
+	self.DriverSeatEnterIndex = 0
+	
+	self.LightSegments = {}
+	
+	self.Windows = {}
+	
+	self.DirtTextures = {}
+	
+	self.Flags = VehicleInfo.Flags
+	
+	self.MovableParts = {}
+	
+	self.LicensePlates = {}
+	
+	self.IsLocked = false
+	
+	self.EngineRunning = false
+	
+	self.EngineToggling = false
+	
+	self.HasAlarm = table.find(VehicleInfo.Flags, "AlwaysHasAlarm") or math.random(1, 3) == 1
+	
+	self.CurrentWaypointIndex = nil
+	
+	self.VehicleInfo = VehicleInfo
+	
+	self.SeatLayoutInfo = VehicleSeating.SeatLayouts[VehicleInfo.SeatLayout]
+	
+	if self.HasAlarm then
+		self.AlarmActive = false
+		
+		self.AlarmDebounce = false
+	end
+	
+	self.ConvertibleRoofOpen = false
+	
+	self.ConvertibleRoofMoving = false
+	
+	self.DamageStatus = "Normal"
+	
+	self.LightValues = {
+		Brake = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Head = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Left = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Reverse = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Interior = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Right = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Siren = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Siren1 = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Siren2 = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Lock = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Hazard = {
+			Enabled = false,
+			Debounce = false,
+		},
+		Daytime = {
+			Enabled = false,
+			Debounce = false,
+		},
+	}
+	
+	local LightSegmentIndex = 0
+	
+	for _, Object in pairs(Vehicle.Body:GetDescendants()) do
+		if Object.Name == "LightSegment" then
+			
+			LightSegmentIndex += 1
+			
+			local LightSegment = Object
+			
+			self.LightSegments[LightSegmentIndex] = {
+				LightParts = {},
+				
+				VisibleSegments = {},
+				
+				IsBroken = false,
+				
+				LightSegment = LightSegment
+			}
+			
+			for LightPartIndex, LightPart in pairs(LightSegment.LightParts:GetChildren()) do
+				
+				self.LightSegments[LightSegmentIndex].LightParts[LightPartIndex] = {
+					LightType = LightPart.LightType.Value,
+					LightObject = LightPart:FindFirstChildOfClass("Light"),
+					LightPart = LightPart
+				}
+			end
+			
+			for _, VisibleSegment in pairs(LightSegment.VisibleSegments:GetChildren()) do
+				table.insert(self.LightSegments[LightSegmentIndex].VisibleSegments, VisibleSegment)
+			end
+		elseif Object.Name == "DirtTexture" then
+			table.insert(self.DirtTextures, Object)
+		elseif Object.Name == "Window" then
+			table.insert(self.Windows, Object)
+		elseif Object.Name == "LicensePlate" then
+			table.insert(self.LicensePlates, Object)
+		end 
+	end
+	
+	for Index, MovablePart in pairs(Vehicle.Body.MovableParts:GetChildren()) do
+		self.MovableParts[Index] = {
+			MovablePart = MovablePart,
+			IsOpen = false,
+		}
+	end
+	
+	local CopiedClass = GeneralFunctions:CopyDictionary(self)
+	
+	--Events.OnVehicleClassCreated:FireAllClients(Vehicle, CopiedClass)
+	
+	local DestroyConnection = nil
+
+	DestroyConnection = Vehicle.Destroying:Connect(function()
+		DestroyConnection:Disconnect()
+		self:Destroy()
+	end)
+	
+	return self
+end
+
+function VehicleClass:SetDamageEmitters(EmitterTable)
+	for _, EmitterPart in pairs(self.Vehicle.Body.DamageEmitters:GetChildren()) do
+		for _, EmitterObject in pairs(EmitterPart:GetChildren()) do
+			EmitterObject.Enabled = table.find(EmitterTable, EmitterObject.Name) ~= nil
+		end
+	end
+end
+
+function VehicleClass:InitiatePlayerDriveLoop(Player)
+	
+	task.spawn(function()
+		local CurrentDriverSeatEnterIndex = self.DriverSeatEnterIndex
+
+		local ChassisHandler = require(self.Vehicle.Scripts.ChassisHandler)
+
+		while self.DriverSeatEnterIndex == CurrentDriverSeatEnterIndex do
+			task.wait(1)
+
+			local LinearVelocity = ChassisHandler:GetLinearVelocity()
+
+			self:AddDirtLevel(0.001)
+		end
+	end)
+end
+
+function VehicleClass:OnHealthChanged()
+	local Health = self.Stats.Health
+	
+	local NewDamageStatus = "Normal"
+	
+	if Health <= 0 then
+		NewDamageStatus = "Exploded"
+	elseif Health < 200 then
+		NewDamageStatus = "OnFire"
+	elseif Health < self.VehicleInfo.Properties.Health * 0.5 then
+		NewDamageStatus = "Damaged"
+	end
+	
+	if NewDamageStatus ~= self.DamageStatus then
+		self.DamageStatus = NewDamageStatus
+		
+		if NewDamageStatus == "OnFire" then
+			self:SetDamageEmitters({"Smoke", "Fire"})
+			self:PlaySound("Steam")
+			self:PlaySound("FireSound")
+			self:ToggleEngine(false)
+			self:SetDirtLevel(1)
+		elseif NewDamageStatus == "Damaged" then
+			self:SetDamageEmitters({"Smoke"})
+			self:PlaySound("Steam")
+			self:StopSound("FireSound")
+		elseif NewDamageStatus == "Exploded" then
+			self:ExplodeVehicle()
+		else
+			self:SetDamageEmitters({})
+			self:StopSound("FireSound")
+			self:StopSound("Steam")
+			
+		end
+	end
+end
+
+function VehicleClass:DamageVehicle(Damage)
+	
+	self.Stats.Health = math.clamp(self.Stats.Health - Damage, 0, self.VehicleInfo.Properties.Health)
+	
+	self:OnHealthChanged()
+end
+
+function VehicleClass:SetWaypointOccupation(WaypointIndex)
+	
+	if self.CurrentWaypointIndex then
+		local OccupantTablePosition = table.find(WaypointsList.VehiclePaths[self.CurrentWaypointIndex].Occupants, self.Vehicle)
+		
+		table.remove(WaypointsList.VehiclePaths[self.CurrentWaypointIndex].Occupants, OccupantTablePosition)
+	end
+	
+	self.CurrentWaypointIndex = WaypointIndex
+	
+	if WaypointIndex then
+		table.insert(WaypointsList.VehiclePaths[WaypointIndex].Occupants, self.Vehicle)
+	end
+end
+
+function VehicleClass:SetDirtLevel(DirtLevel)
+	
+	DirtLevel = math.clamp(DirtLevel, 0, 1)
+	
+	self.Stats.DirtLevel = DirtLevel
+	
+	local Transparency = 1 - DirtLevel
+	
+	for _, Texture in pairs(self.DirtTextures) do
+		Texture.Transparency = Transparency
+	end
+end
+
+function VehicleClass:AddDirtLevel(DirtLevel)
+	self:SetDirtLevel(self.Stats.DirtLevel + DirtLevel)
+end
+
+function VehicleClass:SetNetworkOwnerOfVehicleWithTarget(NetworkOwner)
+	for _, Part in pairs(self.Vehicle:GetDescendants()) do
+		if Part:IsA("BasePart") then
+
+			Part:SetNetworkOwner(NetworkOwner)
+		end
+	end
+	
+	for _, Seat in pairs(self.Vehicle.Seats:GetChildren()) do
+		if Seat.Occupant then
+			for _, Part in pairs(Seat.Occupant.Parent:GetDescendants()) do
+
+				if Part:IsA("BasePart") then
+
+					Part:SetNetworkOwner(NetworkOwner)
+				end
+			end
+		else
+			local DeathWeld = Seat:FindFirstChild("DeathWeld")
+			
+			if DeathWeld then
+				local Occupant = DeathWeld.Part1
+				
+				if Occupant and Occupant.Parent then
+					for _, Part in pairs(Occupant.Parent:GetDescendants()) do
+
+						if Part:IsA("BasePart") then
+
+							Part:SetNetworkOwner(NetworkOwner)
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+function VehicleClass:SetLocked(IsLocked)
+	self.IsLocked = IsLocked
+	
+	for _, Seat in pairs(self.Vehicle.Seats:GetChildren()) do
+		Seat.PromptAttachment.EnterPrompt.Enabled = not IsLocked
+	end
+	
+	self.Vehicle.Seats.Seat1.PromptAttachment.LockPrompt.ActionText = IsLocked and "Unlock" or "Lock"
+end
+
+function VehicleClass:ToggleLock(IsLocked)
+	Events.VehicleInteraction:FireAllClients("OnVehicleLocked", self.Vehicle, IsLocked)
+	
+	self:ToggleEngine(false)
+	
+	self:SetLocked(IsLocked)
+	
+	if IsLocked then
+		
+		self:CloseAllDoors()
+		
+		if self.HasAlarm and not self.AlarmActive then
+			self.AlarmDebounce = false
+		end
+	end
+end
+
+function VehicleClass:SetNetworkOwnerOfVehicle()
+
+	if not self.Vehicle or self.Vehicle.Parent == nil then
+		return
+	end
+
+	local DriverHumanoid = self.Vehicle.Seats.Seat1.Occupant
+
+	local NetworkOwner = nil
+
+	if DriverHumanoid then
+		local DriverPlayer = game.Players:GetPlayerFromCharacter(DriverHumanoid.Parent)
+
+		if DriverPlayer then
+			NetworkOwner = DriverPlayer
+		end
+	end
+
+	self:SetNetworkOwnerOfVehicleWithTarget(NetworkOwner)
+end
+
+function VehicleClass:ProcessLightToggle(Player, GroupName, IsEnabled)
+	if Player then
+		if GeneralFunctions:GetVehicleFromObject(Player.Character.Humanoid.SeatPart) ~= self.Vehicle then
+			return
+		end
+	end
+
+	if self.LightValues[GroupName].Enabled == IsEnabled then
+		return
+	end
+
+	self.LightValues[GroupName].Enabled = IsEnabled
+
+	for _, OtherPlayer in pairs(game.Players:GetPlayers()) do
+		if OtherPlayer ~= Player then
+			Events.VehicleInteraction:FireClient(OtherPlayer, "ToggleLightGroup", self.Vehicle, GroupName, IsEnabled)
+		end
+	end
+end
+
+function VehicleClass:ToggleHorn(Player, IsEnabled)
+	for _, OtherPlayer in pairs(game.Players:GetPlayers()) do
+		if OtherPlayer ~= Player then
+			Events.VehicleInteraction:FireClient(OtherPlayer, "ToggleHorn", self.Vehicle, IsEnabled)
+		end
+	end
+end
+
+function VehicleClass:ToggleSiren(Player, IsEnabled)
+	
+	if not table.find(VehicleList[self.Vehicle.Name].Flags, "HasSiren") then
+		return
+	end
+	
+	if Player then
+		if GeneralFunctions:GetVehicleFromObject(Player.Character.Humanoid.SeatPart) ~= self.Vehicle then
+			return
+		end
+	end
+
+	if self.LightValues.Siren.Enabled == IsEnabled then
+		return
+	end
+
+	self.LightValues.Siren.Enabled = IsEnabled
+
+	for _, OtherPlayer in pairs(game.Players:GetPlayers()) do
+		if OtherPlayer ~= Player then
+			Events.VehicleInteraction:FireClient(OtherPlayer, "ToggleSiren", self.Vehicle, IsEnabled)
+		end
+	end
+end
+
+function VehicleClass:FixAllLightSegments()
+	for Index, SegmentInfo in pairs(self.LightSegments) do
+		SegmentInfo.IsBroken = false
+	end
+end
+
+function VehicleClass:BreakAllLightSegments()
+	for Index, SegmentInfo in pairs(self.LightSegments) do
+		SegmentInfo.IsBroken = true
+	end
+end
+
+function VehicleClass:BreakLightSegment(LightSegment)
+	
+	local SegmentIndex = nil
+
+	for Index, SegmentInfo in pairs(self.LightSegments) do
+		if SegmentInfo.LightSegment == LightSegment then
+			SegmentIndex = Index
+			break
+		end
+	end
+
+	if not SegmentIndex then
+		return
+	end
+
+	self.LightSegments[SegmentIndex].IsBroken = true
+end
+
+function VehicleClass:SetGyroEnabled(IsEnabled)
+	if not table.find(self.Flags, "HasSteerGyroscope") then
+		return
+	end
+	
+	self.Vehicle.Chassis.Gyroscope.BodyGyro.MaxTorque = Vector3.new(0, 0, IsEnabled and 1000 or 0)
+end
+
+function VehicleClass:StopSound(SoundName)
+	local OriginalSound = self.Vehicle.PrimaryPart:FindFirstChild(SoundName)
+
+	if OriginalSound then
+		OriginalSound:Stop()
+	end
+end
+
+function VehicleClass:PlaySound(SoundName, CreateClone)
+	local OriginalSound = self.Vehicle.PrimaryPart:FindFirstChild(SoundName)
+
+	if not OriginalSound then
+		warn("No Sound Found of Name ".. SoundName)
+		return
+	end
+
+	if CreateClone then
+		local Sound = OriginalSound:Clone()
+		Sound.Parent = OriginalSound.Parent
+
+		Sound:Play()
+
+		Debris:AddItem(Sound, Sound.TimeLength + 3)
+	else
+		OriginalSound:Play()
+	end
+end
+
+function VehicleClass:FixTire(WheelModel)
+	local TirePart = WheelModel.TireModel.PrimaryPart
+	
+	if TirePart.Transparency == 0 then
+		return
+	end
+	
+	TirePart.Transparency = 0
+	
+	TirePart.CanQuery = true
+	
+	local PhysicalWheel = WheelModel.TireWeld.Part0
+	
+	PhysicalWheel.Size = TirePart.Size
+end
+
+function VehicleClass:PopTire(TirePart)
+	if TirePart.Transparency == 1 then
+		return
+	end
+	
+	local WheelModel = TirePart.Parent.Parent
+	
+	local PhysicalWheel = WheelModel.TireWeld.Part0
+
+	TirePart.Transparency = 1
+
+	TirePart.CanQuery = false
+
+	PhysicalWheel.Size = TirePart.Parent.Parent.RimModel.RimScale.Size
+
+	local TirePopSound = AssetsFolder.TirePopSound:Clone()
+
+	local TirePopSmoke = AssetsFolder.TirePopSmoke:Clone()
+
+	TirePopSound.Parent = TirePart
+
+	TirePopSmoke.Parent = TirePart
+
+	TirePopSound:Play()
+
+	TirePopSmoke:Emit(3)
+
+	Debris:AddItem(TirePopSound, 3)
+
+	Debris:AddItem(TirePopSmoke, 3)
+end
+
+function VehicleClass:ToggleConvertibleRoof(IsOpen)
+	if not table.find(self.Flags, "IsConvertible") or self.ConvertibleRoofOpen == IsOpen or self.ConvertibleRoofMoving then
+		return
+	end
+	
+	local ClipTable = VehicleSeating.ConvertibleAnimations[self.VehicleInfo.ConvertibleAnimation].ActionAnimation[IsOpen and "Open" or "Close"]
+	
+	self.ConvertibleRoofOpen = IsOpen
+	
+	local RoofObject = self.Vehicle.Body.ConvertibleRoof
+	
+	self.ConvertibleRoofMoving = true
+	
+	for Index, KeypointInfo in pairs(ClipTable) do
+		
+		if KeypointInfo.Command == "Wait" then
+			task.wait(KeypointInfo.Time)
+		elseif KeypointInfo.Command == "MoveTo" then
+			
+			local Model = RoofObject[KeypointInfo.Object]
+			
+			local Tween = TweenService:Create(Model.Motor, TweenInfo.new(KeypointInfo.Time, Enum.EasingStyle.Linear), {C0 = Model.Hinges.Hinge.CFrame:Inverse() * Model.Hinges[KeypointInfo.Target].CFrame})
+
+			Tween:Play()
+		end
+	end
+	
+	self.ConvertibleRoofMoving = false
+end
+
+function VehicleClass:SoundAlarm()
+	
+	if not self.HasAlarm or not self.IsLocked or self.EngineRunning or self.AlarmActive or self.AlarmDebounce then
+		return
+	end
+	
+	self.AlarmActive = true
+	
+	self.AlarmDebounce = true
+	
+	Events.VehicleInteraction:FireAllClients("SoundAlarm", self.Vehicle)
+	
+	local AlarmSound = self.Vehicle.PrimaryPart.AlarmSound
+	
+	task.delay(AlarmSound.TimeLength, function()
+		self.AlarmActive = false
+	end)
+end
+
+function VehicleClass:ToggleMovablePart(Model, IsOpen)
+
+	if Model.IsOpen.Value == IsOpen then
+		return
+	else
+		Model.IsOpen.Value = IsOpen
+	end
+
+	local Tween = TweenService:Create(Model.Motor, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection[IsOpen and "Out" or "In"]), {C0 = IsOpen and Model.Hinges.HingeClosed.CFrame:Inverse() * Model.Hinges.HingeOpen.CFrame or CFrame.new()})
+
+	Tween:Play()
+
+	if IsOpen then
+		self:PlaySound("DoorOpen", true)
+
+		self:ProcessLightToggle(nil, "Interior", true)
+	else
+
+		spawn(function()
+			local Status = Tween.Completed:Wait()
+
+			if Status == Enum.PlaybackState.Completed then
+
+				local InteriorLightEnabled = false
+
+				for _, MovableModel in pairs(Model.Parent:GetChildren()) do
+					if MovableModel.IsOpen.Value then
+						InteriorLightEnabled = true
+						break
+					end
+				end
+
+				self:ProcessLightToggle(nil, "Interior", InteriorLightEnabled)
+
+				self:PlaySound("DoorClose", true)
+			end
+		end)
+	end
+	
+	for _, Object in pairs(Model:GetDescendants()) do
+		if Object.Name == "Occupant" then
+			Object.Value = not IsOpen and Object.Parent or nil
+		end
+	end
+end
+
+local LicensePlateLayouts = require(game.ReplicatedStorage.LicensePlateLayouts)
+
+function VehicleClass:PivotTo(CFrame)
+	
+	local CenterCFrame, Size = self.Vehicle:GetBoundingBox()
+	
+	local VehicleBottomCFrame = CenterCFrame - CenterCFrame.UpVector * Size.Y / 2
+	
+	self.Vehicle:PivotTo(VehicleBottomCFrame:Inverse() * self.Vehicle.PrimaryPart.CFrame * CFrame)
+end
+
+function VehicleClass:Flip()
+	local Params = RaycastParams.new()
+
+	local Orientation = self.Vehicle.PrimaryPart.Orientation
+
+	Params.FilterType = Enum.RaycastFilterType.Exclude
+
+	Params.FilterDescendantsInstances = {workspace.Vehicles}
+
+	local Result = workspace:Raycast(self.Vehicle.PrimaryPart.Position, Vector3.new(0, -20, 0), Params)
+
+	if not Result then
+		return false
+	end
+	
+	self:PivotTo(CFrame.lookAt(Result.Position, Result.Normal))
+end
+
+function VehicleClass:DetachMovablePart(MovablePart)
+	
+	local MovableModel = MovablePart:FindFirstChild("MovableModel")
+	
+	if not MovableModel then
+		return
+	end
+	
+	for _, Part in pairs(MovableModel:GetDescendants()) do
+		if Part:IsA("BasePart") then
+			Part.CanCollide = true
+			
+			Part.Massless = false
+		elseif Part:IsA("Attachment") then
+			Part:Destroy()
+		
+		end
+	end
+	
+	CollisionHandler:SetModelCollisionGroup(MovableModel, "DebrisObjects")
+	
+	MovablePart.Motor.Enabled = false
+end
+
+function VehicleClass:ExplodeVehicle()
+	for _, WheelModel in pairs(self.Vehicle.WheelModels:GetChildren()) do
+		self:PopTire(WheelModel.TireWeld.Part1)
+	end
+	
+	for _, Seat in pairs(self.Vehicle.Seats:GetChildren()) do
+		if Seat.Occupant then
+			Seat.Occupant.Health = 0
+		end
+		
+		for _, Prompt in pairs(Seat.PromptAttachment:GetChildren()) do
+			Prompt.Enabled = false
+		end
+	end
+	
+	for _, LightSegment in pairs(self.LightSegments) do
+		
+	end
+	
+	for _, Part in pairs(self.Vehicle:GetDescendants()) do
+		if Part:IsA("BasePart") then
+			Part.Material = Enum.Material.CorrodedMetal
+		end
+	end
+	
+	for _, Window in pairs(self.Windows) do
+		GeneralFunctions:BreakWindow(Window, false)
+	end
+	
+	for _, LicensePlate in pairs(self.LicensePlates) do
+		LicensePlate.PlateSurface.Enabled = false
+	end
+	
+	for _, Model in pairs(self.Vehicle.Body.MovableParts:GetChildren()) do
+		self:DetachMovablePart(Model)
+	end
+	
+	self:ToggleEngine(false)
+	
+	self:BreakAllLightSegments()
+	
+	Events.VehicleInteraction:FireAllClients("OnVehicleExploded", self.Vehicle)
+	
+	ExplosionHandler:ExplosionAtPoint(self.Vehicle.PrimaryPart.Position, 50)
+end
+
+function VehicleClass:RepairVehicle()
+	
+	if self.DamageStatus == "Exploded" then
+		return
+	end
+	
+	self.Stats.Health = self.VehicleInfo.Properties.Health
+	
+	self:OnHealthChanged()
+	
+	for _, WheelModel in pairs(self.Vehicle.WheelModels:GetChildren()) do
+		self:FixTire(WheelModel)
+	end
+	
+	for _, Window in pairs(self.Windows) do
+		GeneralFunctions:FixWindow(Window)
+	end
+	
+	self:FixAllLightSegments()
+	
+	Events.VehicleInteraction:FireAllClients("OnVehicleRepaired", self.Vehicle)
+	
+	self:SetDirtLevel(0)
+end
+
+function VehicleClass:SetLicensePlates(PlateText)
+
+	local LayoutName = self.VehicleInfo.Properties.LicensePlateType
+	local LayoutInfo = LicensePlateLayouts[LayoutName]
+
+	local PossibleTextures = LayoutInfo.PossibleTextures
+
+	local PlateTexture = PossibleTextures[math.random(1, #PossibleTextures)]
+	
+	self.Stats.LicensePlate = PlateText
+
+	for _, Object in pairs(self.LicensePlates) do
+		local PlateSurface = Object:FindFirstChild("PlateSurface") or AssetsFolder.LicensePlateGuis[LayoutName]:Clone()
+		
+		PlateSurface.Name = "PlateSurface"
+
+		PlateSurface.Texture.Image = PlateTexture
+
+		local TotalTextWritten = 0
+
+		for Index, TextLength in pairs(LayoutInfo.TextLayout) do
+			PlateSurface[Index].Text = string.sub(PlateText, TotalTextWritten + 1, TotalTextWritten + TextLength)
+
+			TotalTextWritten = TotalTextWritten + TextLength
+		end
+
+		PlateSurface.Parent = Object
+	end
+end
+
+function VehicleClass:AddWheelModel(Wheel, TireModelName, RimModelName)
+	
+	-- FIX TIRE
+	
+	local ExistingWheelModel = nil
+	
+	for _, WheelModel in pairs(self.Vehicle.WheelModels:GetChildren()) do
+		if WheelModel.TireWeld.Part0 == Wheel then
+			ExistingWheelModel = WheelModel
+			break
+		end
+	end
+	
+	if ExistingWheelModel then
+		
+		self:FixTire(ExistingWheelModel)
+		
+		ExistingWheelModel:Destroy()
+	end
+	
+	local TireModel = game.ServerStorage.VehicleAssets.Tires[TireModelName]:Clone()
+
+	local RimModel = game.ServerStorage.VehicleAssets.Rims[RimModelName]:Clone()
+	
+	local WheelSize = Wheel.Size
+
+	local WheelModel = Instance.new("Model")
+
+	WheelModel.Name = "WheelModel"
+	
+	TireModel.Name = "TireModel"
+
+	RimModel.Name = "RimModel"
+	
+	TireModel:PivotTo(Wheel.CFrame)
+
+	RimModel:PivotTo(Wheel.CFrame)
+
+	TireModel.RimScale.Size = TireModel.RimScale.Size * (WheelSize / TireModel.PrimaryPart.Size)
+
+	TireModel.PrimaryPart.Size = WheelSize
+	
+	for _, Part in pairs(RimModel:GetChildren()) do
+		if Part ~= RimModel.PrimaryPart then
+
+			local Scale = (TireModel.RimScale.Size / RimModel.RimScale.Size)
+
+			Part.Size = Part.Size * Scale
+			Part.Position = RimModel.RimScale.Position + (Part.Position - RimModel.RimScale.Position) * Scale
+
+			local Weld = Instance.new("WeldConstraint")
+
+			Weld.Part0 = RimModel.PrimaryPart
+
+			Weld.Part1 = Part
+
+			Weld.Parent = RimModel.PrimaryPart
+		end
+
+		Part.Anchored = false
+	end
+
+	RimModel.RimScale.Size = TireModel.RimScale.Size
+
+	local RimWeld = Instance.new("WeldConstraint")
+	
+	RimWeld.Name = "RimWeld"
+
+	RimWeld.Part0 = Wheel
+
+	RimWeld.Part1 = RimModel.PrimaryPart
+
+	RimWeld.Parent = WheelModel
+
+	local TireWeld = Instance.new("WeldConstraint")
+	
+	TireWeld.Name = "TireWeld"
+
+	TireWeld.Part0 = Wheel
+
+	TireWeld.Part1 = TireModel.PrimaryPart
+
+	TireWeld.Parent = WheelModel
+
+	WheelModel.Parent = self.Vehicle.WheelModels
+
+	Wheel.Transparency = 1
+	
+	TireModel.Parent = WheelModel
+
+	RimModel.Parent = WheelModel
+end
+
+function VehicleClass:PaintVehicle(Color)
+	
+	self.Stats.PaintColor = Color
+	
+	for _, Object in pairs(self.Vehicle.Body:GetDescendants()) do
+		if Object.Name == "Paint" then
+			Object.Color = Color
+		end
+	end
+end
+
+function VehicleClass:ToggleExhaustEmitters(IsEnabled)
+	for _, EmitterPart in pairs(self.Vehicle.Body.ExhaustEmitters:GetChildren()) do
+		EmitterPart.Emitter.Enabled = IsEnabled
+	end
+end
+
+function VehicleClass:SetEngine(IsEnabled)
+	
+	local RadioSound = self.Vehicle.PrimaryPart.RadioSound
+	
+	if IsEnabled then
+		RadioHandler:SetSoundToStation(RadioSound, RadioSound.Station.Value)
+
+		self:PlaySound("EngineIdle", false)
+	else
+		self:StopSound("EngineIdle")
+
+		self:ProcessLightToggle(nil, "Brake", false)
+
+		self:ProcessLightToggle(nil, "Reverse", false)
+
+		self:ProcessLightToggle(nil, "Head", false)
+	end
+	
+	RadioSound.Volume = IsEnabled and 0.1 or 0
+	
+	self:ToggleExhaustEmitters(IsEnabled)
+
+	self.Vehicle.InfoFolder.EngineRunning.Value = IsEnabled
+
+	self.EngineRunning = IsEnabled
+
+	self:ProcessLightToggle(nil, "Daytime", IsEnabled)
+end
+
+function VehicleClass:ToggleEngine(IsEnabled)
+
+	if self.Vehicle.InfoFolder.IsTogglingEngine.Value or self.Vehicle.InfoFolder.EngineRunning.Value == IsEnabled then
+		return
+	end
+
+	self.Vehicle.InfoFolder.IsTogglingEngine.Value = true
+
+	if IsEnabled then
+		
+		self:PlaySound("EngineStart", false)
+
+		wait(0.6)
+		
+		if self.DamageStatus == "Exploded" or self.DamageStatus == "OnFire" then
+			self.Vehicle.InfoFolder.IsTogglingEngine.Value = false
+			return
+		end
+		
+		if self.DamageStatus == "Damaged" then
+			if math.random(1, 4) ~= 1 then
+				self.Vehicle.InfoFolder.IsTogglingEngine.Value = false
+				return
+			end
+		end
+	else
+		self:PlaySound("EngineShut", false)
+	end
+	
+	self:SetEngine(IsEnabled)
+
+	self.Vehicle.InfoFolder.IsTogglingEngine.Value = false
+end
+
+function VehicleClass:GetDoorObjectForSeat(SeatName)
+	local DoorName = self.SeatLayoutInfo[SeatName].DoorObject
+
+	if DoorName then
+		return self.Vehicle.Body.MovableParts[DoorName]
+	end
+
+	return nil
+end
+
+function VehicleClass:ExitVehicle(Character, QuickExit)
+	local Seat = Character.Humanoid.SeatPart
+
+	local Player = game.Players:GetPlayerFromCharacter(Character)
+
+	local ChassisHandler = require(self.Vehicle.Scripts.ChassisHandler)
+	
+	if not Seat then
+		return
+	end
+
+	local SeatWeld = Seat:FindFirstChild("SeatWeld")
+
+	if not SeatWeld then
+		return
+	end
+	
+	local AnimationPack = self.SeatLayoutInfo[Seat.Name].AnimationPack
+
+	local AnimationName, EnterSpeed = AnimationExtras:GetVehicleAnimAndSpeed(AnimationPack, "Enter")
+
+	local ExitOffset = Seat.CFrame:Inverse() * (Seat.ExitPosition.WorldCFrame * CFrame.new(0, 2, 0))
+
+	local Door = self:GetDoorObjectForSeat(Seat.Name)
+
+	if Door then
+
+		self:ToggleMovablePart(Door, true)
+
+		if not QuickExit then
+			task.delay(EnterSpeed, function()
+				self:ToggleMovablePart(Door, false)
+			end)
+		end
+	end
+
+	TweenService:Create(SeatWeld, TweenInfo.new(EnterSpeed), {C0 = ExitOffset}):Play()
+
+	if Seat == self.Vehicle.Seats.Seat1 then
+		if not QuickExit then
+			self:ToggleEngine(false)
+		end
+
+		ChassisHandler:SetParkingBrakes(true)
+
+		self:SetNetworkOwnerOfVehicleWithTarget(nil)
+	end
+	
+	local EnterAnimationName, Speed = AnimationExtras:GetVehicleAnimAndSpeed(AnimationPack, "Enter")
+	
+	AnimationHandler:Play(EnterAnimationName, Character.Humanoid, Speed, nil, nil, true)
+
+	wait(EnterSpeed)
+
+	Character.Humanoid.Sit = false
+
+	repeat
+		wait()
+	until Character.Humanoid.SeatPart ~= Seat
+	
+	self:SetGyroEnabled(true)
+
+	local SitAnimationName, Speed = AnimationExtras:GetVehicleAnimAndSpeed(AnimationPack, "Sit")
+
+	AnimationHandler:Stop(SitAnimationName, Character.Humanoid, Player == nil)
+end
+
+function VehicleClass:OnSeatOccupied(Character, Seat)
+	
+	local Player = game.Players:GetPlayerFromCharacter(Character)
+
+	if Player then
+		
+		local OccupantScript = AssetsFolder.OccupantScript:Clone()
+		
+		OccupantScript.Parent = Player.PlayerGui
+		
+		if Seat:IsA("VehicleSeat") then
+
+			local DriverScript = AssetsFolder.DriverScript:Clone()
+
+			DriverScript.VehicleObject.Value = self.Vehicle
+
+			DriverScript.Parent = Player.PlayerGui
+
+			self.DriverSeatEnterIndex += 1
+
+			self:InitiatePlayerDriveLoop(Player)
+		end
+	end
+
+	self:SetNetworkOwnerOfVehicle()
+end
+
+function VehicleClass:OnSeatUnoccupied(Seat, Character)
+	if Character.Parent ~= nil then
+		Character.PrimaryPart.Massless = false
+
+		if Seat.Parent ~= nil then
+			
+			if not self.SeatLayoutInfo[Seat.Name].RagdollWhenHit then
+				task.wait(0.1)
+
+				if Character.Humanoid.Health <= 0 then
+					local DeathWeld = Instance.new("WeldConstraint")
+
+					DeathWeld.Name = "DeathWeld"
+
+					DeathWeld.Parent = Seat
+
+					DeathWeld.Part0 = Seat
+
+					DeathWeld.Part1 = Character.PrimaryPart
+				end
+			end
+		end
+	end
+
+	if Seat.Parent ~= nil then
+		self:SetNetworkOwnerOfVehicle()
+
+		local ChassisHandler = require(self.Vehicle.Scripts.ChassisHandler)
+
+		Seat.PromptAttachment.EnterPrompt.Enabled = not self.IsLocked
+
+		if Seat == self.Vehicle.Seats.Seat1 then
+
+			self:SetGyroEnabled(false)
+
+			ChassisHandler:SetAcceleration(0)
+
+			ChassisHandler:SetBraking(0)
+
+			self:ProcessLightToggle(nil, "Brake", false)
+
+			self:ToggleHorn(nil, false)
+
+			local Player = game.Players:GetPlayerFromCharacter(Character)
+
+			if Player then
+				self.DriverSeatEnterIndex += 1
+			end
+
+			if table.find(self.VehicleInfo.Flags, "HasSiren") then
+				Events.VehicleInteraction:FireAllClients("ToggleSirenSound", self.Vehicle, false)
+			end
+		end
+	end
+end
+
+function VehicleClass:PutIntoSeat(Character, Seat, CustomC0)
+
+	if Character.Humanoid.Health <= 0 then
+		return
+	end
+	
+	Character.PrimaryPart.Massless = true
+
+	Seat.PromptAttachment.EnterPrompt.Enabled = false
+	
+	local DeathSeatWeld = Seat:FindFirstChild("DeathWeld")
+
+	if DeathSeatWeld then
+		
+		DeathSeatWeld:Destroy()
+		
+		local DeadCharacterPrimaryPart = DeathSeatWeld.Part1
+		
+		if DeadCharacterPrimaryPart then
+			local DeadCharacter = DeadCharacterPrimaryPart.Parent
+
+			if DeadCharacter then
+				DeadCharacter:PivotTo(Seat.ExitPosition.WorldCFrame)
+			end
+		end
+	end
+
+	Seat:Sit(Character.Humanoid)
+
+	self:OnSeatOccupied(Character, Seat)
+
+	local OccupantChangedConnection = nil
+
+	OccupantChangedConnection = Seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+		OccupantChangedConnection:Disconnect()
+
+		OccupantChangedConnection = nil
+		
+		self:OnSeatUnoccupied(Seat, Character)
+	end)
+	
+	if Seat == self.Vehicle.Seats.Seat1 then
+		self.Vehicle.Constraints.SteeringPrismatic.Speed = game.Players:GetPlayerFromCharacter(Character) ~= nil and VehicleList[self.Vehicle.Name].Handling.SteerSpeed or 100
+	end
+
+	local Player = game.Players:GetPlayerFromCharacter(Character)
+
+	local SeatWeld = Seat:WaitForChild("SeatWeld")
+
+	SeatWeld.C1 = CFrame.new()
+
+	SeatWeld.C0 = CustomC0 or CFrame.new(0, 1.25, 0)
+	
+	local AnimationPack = self.SeatLayoutInfo[Seat.Name].AnimationPack
+
+	local SitAnimationName, Speed = AnimationExtras:GetVehicleAnimAndSpeed(AnimationPack, "Sit")
+
+	AnimationHandler:Play(SitAnimationName, Character.Humanoid, nil, Player == nil)
+end
+
+function VehicleClass:CloseAllDoors()
+	for _, MovablePart in pairs(self.Vehicle.Body.MovableParts:GetChildren()) do
+		self:ToggleMovablePart(MovablePart, false)
+	end
+end
+
+function VehicleClass:EnterVehicle(Character, Seat)
+	
+	if self.DamageStatus == "Exploded" then
+		return
+	end
+
+	local Door = self:GetDoorObjectForSeat(Seat.Name)
+	
+	local AnimationPack = self.SeatLayoutInfo[Seat.Name].AnimationPack
+
+	local AnimationName, EnterSpeed = AnimationExtras:GetVehicleAnimAndSpeed(AnimationPack, "Enter")
+
+	Character.PrimaryPart.CFrame = Seat.ExitPosition.WorldCFrame * CFrame.new(0, 2, 0)
+	
+	self:SetGyroEnabled(true)
+
+	if Door then
+		self:ToggleMovablePart(Door, true)
+
+		delay(EnterSpeed, function()
+			self:ToggleMovablePart(Door, false)
+		end)
+	end
+
+	local EnterOffset = Seat.CFrame:Inverse() * Character.PrimaryPart.CFrame
+
+	self:PutIntoSeat(Character, Seat, EnterOffset)
+
+	local SeatWeld = Seat:WaitForChild("SeatWeld")
+	
+	local AnimationPack = self.SeatLayoutInfo[Seat.Name].AnimationPack
+
+	local EnterAnimationName, Speed = AnimationExtras:GetVehicleAnimAndSpeed(AnimationPack, "Enter")
+
+	AnimationHandler:Play(EnterAnimationName, Character.Humanoid, Speed)
+
+	TweenService:Create(SeatWeld, TweenInfo.new(EnterSpeed, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {C0 = CFrame.new(0, 1.25, 0)}):Play()
+end
+
+function VehicleClass:Destroy()
+
+	if not VehicleClass.Vehicles[self.Vehicle] then
+		return
+	end
+	
+	self:SetWaypointOccupation(nil)
+
+	VehicleClass.Vehicles[self.Vehicle] = nil
+
+	self = nil
+
+	return nil
+end
+
+function VehicleClass.GetVehicleClass(Vehicle)
+	return VehicleClass.Vehicles[Vehicle]
+end
+
+return VehicleClass
