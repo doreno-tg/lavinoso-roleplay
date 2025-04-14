@@ -1,0 +1,490 @@
+local Player = game.Players.LocalPlayer
+
+local VehicleList = require(game.ReplicatedStorage.VehicleList)
+
+local Events = game.ReplicatedStorage.Events
+
+local Mouse = Player:GetMouse()
+
+local LocalVehicleClass = require(game.ReplicatedStorage.LocalVehicleClass)
+
+local UserInputService = game:GetService("UserInputService")
+
+local IsMobilePlayer = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local ContextActionService = game:GetService("ContextActionService")
+
+local ReplicationValues = require(game.ReplicatedStorage.ReplicationValues)
+
+local SelectedTouchControlSetting = "DragButtons"
+
+local Controls = require(Player.PlayerScripts.PlayerModule):GetControls()
+
+local InterfaceHandler = require(Player.PlayerGui.ClientScripts.InterfaceHandler)
+
+local RadioStations = require(game.ReplicatedStorage.RadioStations)
+
+local Character = Player.Character
+
+local Humanoid = Character.Humanoid
+
+local Vehicle = script.VehicleObject.Value
+
+local VehicleInfo = VehicleList[Vehicle.Name]
+
+local ChassisHandler = require(Vehicle.Scripts.ChassisHandler)
+
+local DriverSeat = Vehicle.Seats.Seat1
+
+local EngineRunning = Vehicle.InfoFolder.EngineRunning.Value
+
+local LinearTopSpeed = ChassisHandler:CalculateRotationalSpeedForGearIndex(#VehicleInfo.Handling.GearRatios) * ChassisHandler.WheelRadius
+
+local BrakeLockFactor = 0
+
+warn(LinearTopSpeed)
+
+local VehicleUI = Player.PlayerGui.VehicleUI
+
+local TouchControlUI = VehicleUI.MobileControls[SelectedTouchControlSetting]
+
+local SharedVehicleModule = require(game.ReplicatedStorage.SharedVehicleModule)
+
+local HasSteeringWheel = not table.find(VehicleInfo.Flags, "NoSteeringWheel")
+
+local SteeringWheelFolder = nil
+
+if HasSteeringWheel then
+	SteeringWheelFolder = Vehicle.Body.SteeringWheel
+end
+
+local VehicleExitPrompted = false
+
+local VehicleInstance = LocalVehicleClass.GetLocalVehicleClass(Vehicle)
+
+local TopSteerSpeed = VehicleInfo.Handling.TopSteerExtraSpeed + LinearTopSpeed
+
+local KeyMap = {
+	Accelerate = {
+		KeyCodes = {
+			Enum.KeyCode.W,
+		},
+		OptionalFunctionToBind = nil,
+	},
+	Decelerate = {
+		KeyCodes = {
+			Enum.KeyCode.S,
+		},
+		OptionalFunctionToBind = nil,
+	},
+	SteerLeft = {
+		KeyCodes = {
+			Enum.KeyCode.A,
+		},
+		OptionalFunctionToBind = nil,
+	},
+	SteerRight = {
+		KeyCodes = {
+			Enum.KeyCode.D,
+		},
+		OptionalFunctionToBind = nil,
+	},
+	ParkingBrake = {
+		KeyCodes = {
+			Enum.KeyCode.Space,
+		},
+		OptionalFunctionToBind = nil,
+	},
+	Horn = {
+		KeyCodes = {
+			Enum.KeyCode.H,
+		},
+		
+		ForbiddenFlag = "HasSiren",
+		
+		OptionalFunctionToBind = function(ActionName, InputState)
+			
+			local IsEnabled = InputState == Enum.UserInputState.Begin
+			
+			Events.VehicleInteraction:FireServer("ToggleHorn", IsEnabled)
+			
+			
+			Vehicle.PrimaryPart.Horn.Playing = IsEnabled
+		end,
+	},
+	VehicleLights = {
+		KeyCodes = {
+			Enum.KeyCode.L,
+		},
+		OptionalFunctionToBind = function(ActionName, InputState)
+			
+			if InputState == Enum.UserInputState.Begin then
+				Events.SetVehicleLightsEnabled:Fire(Vehicle, "Head", not VehicleInstance.LightValues.Head.Enabled)
+			end
+		end,
+	},
+	VehicleIndicators = {
+		KeyCodes = {
+			Enum.KeyCode.Comma,
+			Enum.KeyCode.Period,
+		},
+		OptionalFunctionToBind = function(ActionName, InputState, InputObject)
+
+			if InputState == Enum.UserInputState.Begin then
+				local LightGroup = InputObject.KeyCode == Enum.KeyCode.Period and "Right" or "Left"
+				
+				local GroupIsEnabled = VehicleInstance.LightValues[LightGroup].Enabled
+
+				Events.SetVehicleLightsEnabled:Fire(Vehicle, LightGroup, not GroupIsEnabled)
+				
+				if not GroupIsEnabled then
+					local OppositeLightGroup = LightGroup == "Right" and "Left" or "Right"
+					
+					Events.SetVehicleLightsEnabled:Fire(Vehicle, OppositeLightGroup, false)
+				end
+			end
+		end,
+	},
+	HazardLights = {
+		KeyCodes = {
+			Enum.KeyCode.X,
+		},
+		OptionalFunctionToBind = function(ActionName, InputState, InputObject)
+
+			if InputState == Enum.UserInputState.Begin then
+				Events.SetVehicleLightsEnabled:Fire(Vehicle, "Hazard", not VehicleInstance.LightValues.Hazard.Enabled)
+			end
+		end,
+	},
+	ConvertibleRoof = {
+		KeyCodes = {
+			Enum.KeyCode.G,
+		},
+		
+		RequiredFlag = "IsConvertible",
+		
+		OptionalFunctionToBind = function(ActionName, InputState, InputObject)
+
+			if InputState == Enum.UserInputState.Begin then
+				Events.VehicleInteraction:FireServer("ToggleConvertibleRoof")
+			end
+		end,
+	},
+	SirenLights = {
+		KeyCodes = {
+			Enum.KeyCode.H,
+		},
+		
+		RequiredFlag = "HasSiren",
+		
+		OptionalFunctionToBind = function(ActionName, InputState, InputObject)
+
+			if InputState == Enum.UserInputState.Begin then
+				
+				local IsEnabled = not VehicleInstance.LightValues.Siren.Enabled
+				
+				if VehicleInstance.LightValues.Siren.Debounce then
+					return
+				end
+				
+				Events.SetVehicleLightsEnabled:Fire(Vehicle, "Siren", IsEnabled)
+				
+				Events.VehicleInteraction:FireServer("ToggleSiren", IsEnabled)
+				
+				Vehicle.PrimaryPart.SirenMain.Playing = IsEnabled
+			end
+		end,
+	},
+}
+
+local PressedKeys = {}
+
+local RadioStationCount = 0
+
+for _, Station in pairs(RadioStations) do
+	RadioStationCount += 1
+end
+
+if IsMobilePlayer then
+	
+	Player.PlayerGui.TouchGui.TouchControlFrame.Position = UDim2.new(0,0,1,0)
+	
+	if SelectedTouchControlSetting == "DragButtons" then
+		VehicleUI.MobileControls.DragButtons.AccelerationFrame.TouchPan:Connect(function(TouchPositions)
+			for i, v in pairs(TouchPositions) do
+				warn(i, v)
+			end
+		end)
+	end
+end
+
+
+function DeleteScript()
+	--SharedVehicleModule:SetVehicleIKControls(Character, nil)
+	InterfaceHandler:TweenRadioFrame(false)
+	
+	for _, Motor in pairs(ChassisHandler.Motors) do
+		Motor.Attachment1.Parent.WheelSmoke.Rate = 0
+	end
+	
+	Vehicle.PrimaryPart.EngineIdle.PlaybackSpeed = VehicleInfo.Sounds.EngineIdlePitch
+	
+	Vehicle.PrimaryPart.TireSqueal.Volume = 0
+	
+	script:Destroy()
+end
+
+function ProcessInputWithoutFunctions(ActionName, InputState)
+	PressedKeys[ActionName] = InputState == Enum.UserInputState.Begin and 1 or 0
+end
+
+function BindInputActions()
+	
+	for Action, ActionInfo in pairs(KeyMap) do
+		if (not ActionInfo.RequiredFlag or table.find(VehicleInfo.Flags, ActionInfo.RequiredFlag)) and (not ActionInfo.ForbiddenFlag or not table.find(VehicleInfo.Flags, ActionInfo.ForbiddenFlag)) then
+			ContextActionService:BindActionAtPriority(Action, ActionInfo.OptionalFunctionToBind or ProcessInputWithoutFunctions, false, math.huge, table.unpack(ActionInfo.KeyCodes))
+			
+			PressedKeys[Action] = 0
+		end		
+	end
+end
+
+function UnbindInputActions()
+	
+	for Action, ActionInfo in pairs(KeyMap) do
+		ContextActionService:UnbindAction(Action)
+	end
+end
+
+Vehicle.AncestryChanged:Connect(function()
+	if Vehicle.Parent == nil then
+		UnbindInputActions()
+		DeleteScript()
+	end
+end)
+
+Humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+	if Humanoid.SeatPart ~= DriverSeat then
+		UnbindInputActions()
+		DeleteScript()
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(InputObject)
+	if InputObject.UserInputType == Enum.UserInputType.MouseWheel then
+		local CurrentRadioStation = Vehicle.PrimaryPart.RadioSound.Station.Value
+		
+		local CurrentRadioStationIndex = 0
+		
+		for Station, _ in pairs(RadioStations) do
+			CurrentRadioStationIndex = CurrentRadioStationIndex + 1
+			
+			if CurrentRadioStation == Station then
+				break
+			end
+		end
+		
+		local NextRadioStationIndex = CurrentRadioStationIndex + InputObject.Position.Z
+		
+		NextRadioStationIndex = NextRadioStationIndex == 0 and RadioStationCount or NextRadioStationIndex > RadioStationCount and 1 or NextRadioStationIndex
+		
+		local NextStation = nil
+		
+		local Counter = 0
+		
+		for Station, _ in pairs(RadioStations) do
+			Counter = Counter + 1
+			
+			if Counter == NextRadioStationIndex then
+				NextStation = Station
+			end
+		end
+		
+		InterfaceHandler:OnRadioStationChanged(NextStation)
+		
+		Events.VehicleInteraction:FireServer("ChangeRadioStation", NextStation)
+	end
+end)
+
+Vehicle.InfoFolder.EngineRunning.Changed:Connect(function()
+	
+	local PreviousEngineState = EngineRunning
+	
+	EngineRunning = Vehicle.InfoFolder.EngineRunning.Value
+	
+	if EngineRunning ~= PreviousEngineState then
+		if EngineRunning then
+			InterfaceHandler:OnRadioStationChanged(Vehicle.PrimaryPart.RadioSound.Station.Value)
+		end
+	end
+	
+	EngineRunning = Vehicle.InfoFolder.EngineRunning.Value
+end)
+
+if EngineRunning then
+	InterfaceHandler:OnRadioStationChanged(Vehicle.PrimaryPart.RadioSound.Station.Value)
+end
+
+BindInputActions()
+
+spawn(function()
+	while Vehicle.Parent ~= nil do
+
+		local VelocityVector = Vehicle.PrimaryPart.Velocity
+
+		local Velocity = VelocityVector.Magnitude
+
+		local MoveDirection = math.sign(Vehicle.PrimaryPart.CFrame.LookVector:Dot(VelocityVector.Unit))
+		
+		local MotorStats = ChassisHandler:GetMotorStats()
+		
+		local TotalAcceleration = 0
+		
+		local TotalSteer = 0
+		
+		TotalAcceleration += PressedKeys.Accelerate
+		
+		TotalAcceleration -= PressedKeys.Decelerate
+		
+		if VehicleExitPrompted then
+			TotalAcceleration = 0
+		end
+		
+		TotalSteer += PressedKeys.SteerLeft
+		
+		TotalSteer -= PressedKeys.SteerRight
+		
+		--local MouseScale = Mouse.Y / workspace.CurrentCamera.ViewportSize.Y
+		
+		--if MouseScale < 0.5 then
+		--	TotalAcceleration = (0.5 - MouseScale) * 2
+		--else
+		--	TotalAcceleration = - (MouseScale - 0.5) * 2
+		--end
+		
+		local IsAcceleratingInDriveDirection = math.sign(TotalAcceleration) == MoveDirection
+		
+		local RotationalVelocity = 0
+
+		local CombinedForwardSlip = 0
+		
+		local CombinedTotalSlip = 0
+		
+		for Motor, MotorStats in pairs(MotorStats) do
+			
+			if table.find(ChassisHandler.PoweredMotors, Motor) then
+				RotationalVelocity += MotorStats.RotationalSpeed
+			end
+			
+			local WheelSmoke = Motor.Attachment1.Parent.WheelSmoke
+			
+			if MotorStats.FloorMaterial then
+				
+				WheelSmoke.Rate = math.clamp(math.abs(MotorStats.TotalSlip) - 5, 0, 10) * 5
+				
+				CombinedTotalSlip = MotorStats.TotalSlip + CombinedTotalSlip
+				
+				CombinedForwardSlip = MotorStats.ForwardSlip + CombinedForwardSlip
+			else
+				WheelSmoke.Rate = 0
+			end
+		end
+		
+		local TotalSlipSpeedByMoveDirection = CombinedForwardSlip * MoveDirection
+		
+		local AlignWheelSpeed = false
+		
+		if TotalSlipSpeedByMoveDirection > 5 and CombinedForwardSlip / CombinedTotalSlip > 0.97 then
+			if TotalAcceleration < 0 then
+				BrakeLockFactor = math.clamp(BrakeLockFactor + 0.05, 0, 0.7)
+				TotalAcceleration = math.clamp(TotalAcceleration, -1 + BrakeLockFactor, 0)
+			elseif IsAcceleratingInDriveDirection then
+				AlignWheelSpeed = true
+				TotalAcceleration = 0
+			end
+		else 
+			BrakeLockFactor = math.clamp(BrakeLockFactor - 0.02, 0, 0.7)
+		end
+		
+		RotationalVelocity = RotationalVelocity / #ChassisHandler.PoweredMotors
+
+		ChassisHandler.CurrentRotationalSpeed = RotationalVelocity
+
+		local LinearVelocity = RotationalVelocity * ChassisHandler.WheelRadius
+
+		local DriveDirection = math.sign(LinearVelocity)
+		
+		Vehicle.PrimaryPart.TireSqueal.Volume = math.clamp((math.abs(CombinedTotalSlip) - 5) / #ChassisHandler.Motors * 0.1, 0, 1)
+		
+		if TotalAcceleration ~= 0 and not EngineRunning and Vehicle.InfoFolder.IsTogglingEngine.Value == false and not VehicleExitPrompted then
+			Events.VehicleInteraction:FireServer("StartEngine")
+		end
+		
+		ChassisHandler:UpdateEngineRev()
+		
+		local RevForPreviousGear = 0
+		
+		if ChassisHandler.CurrentGear > 2 then
+			RevForPreviousGear = ChassisHandler:CalculateRevForGearIndex(ChassisHandler.CurrentGear - 1)
+		end
+		
+		if MoveDirection == -1 and TotalAcceleration < 0 then
+			ChassisHandler:ChangeToGear(1)
+		elseif ChassisHandler.CurrentGear > 2 and RevForPreviousGear < VehicleInfo.Handling.RedLine - 400 then
+			ChassisHandler:ChangeToGear(ChassisHandler.CurrentGear - 1)
+		elseif (ChassisHandler.CurrentRev > VehicleInfo.Handling.RedLine - 200 and not ChassisHandler.Clutched) or (TotalAcceleration > -1 and ChassisHandler.CurrentGear == 1) then
+			ChassisHandler:ChangeToGear(ChassisHandler.CurrentGear + 1)
+		end
+		
+		ChassisHandler:SetParkingBrakes(VehicleExitPrompted or PressedKeys.ParkingBrake ~= 0)
+		
+		local SteerRate = TotalSteer * (1 - math.clamp(Velocity / TopSteerSpeed, 0, 1 - VehicleInfo.Handling.SteerRateMin))
+		
+		ChassisHandler:SetSteer(SteerRate, LinearVelocity)
+		
+		Events.SetVehicleLightsEnabled:Fire(Vehicle, "Reverse", ChassisHandler.CurrentGear == 1)
+		
+		if VehicleInfo.Handling.RedLine < ChassisHandler.CurrentRev and IsAcceleratingInDriveDirection then
+			TotalAcceleration = 0
+		end
+		
+		if Velocity > 5 then
+			for _, MovablePart in pairs(Vehicle.Body.MovableParts:GetChildren()) do
+				if MovablePart.IsOpen.Value then
+					Events.VehicleInteraction:FireServer("CloseAllDoors")
+					break
+				end
+			end
+		end
+		
+		if VehicleExitPrompted then
+			ChassisHandler:SetBraking(1)
+			ChassisHandler:SetAcceleration(0)
+		else
+			if TotalAcceleration ~= 0 then
+				if (Velocity < 1 or IsAcceleratingInDriveDirection) and Vehicle.InfoFolder.EngineRunning.Value == true then
+
+					ChassisHandler:SetAcceleration(TotalAcceleration, nil, AlignWheelSpeed and 0 or nil, true)
+					ChassisHandler:SetBraking(0)
+				else
+					ChassisHandler:SetAcceleration(0)
+					ChassisHandler:SetBraking(math.abs(TotalAcceleration))
+				end
+			else
+
+				ChassisHandler:SetAcceleration(0)
+				ChassisHandler:SetBraking(Velocity < 3 and 1 or 0)
+			end
+		end
+		
+		wait()
+	end
+end)
+
+Events.OnVehicleExitPrompted.Event:Connect(function()
+	VehicleExitPrompted = true
+end)
+
+ChassisHandler.Shifting = false
+
+--SharedVehicleModule:SetVehicleIKControls(Character, Vehicle)
