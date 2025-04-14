@@ -1,0 +1,360 @@
+local VehicleHandler = {}
+
+local TweenService = game:GetService("TweenService")
+
+local VehicleClass = require(game.ServerScriptService.VehicleClass)
+
+local ReplicationValues = require(game.ReplicatedStorage.ReplicationValues)
+
+local Events = game.ReplicatedStorage.Events
+
+local VehicleSeating = require(game.ReplicatedStorage.VehicleSeating)
+
+local GeneralFunctions = require(game.ReplicatedStorage.GeneralFunctions)
+
+local VehicleList = require(game.ReplicatedStorage.VehicleList)
+
+local AnimationHandler = require(game.ReplicatedStorage.AnimationHandler)
+
+local RadioHandler = require(game.ServerScriptService.RadioHandler)
+
+local Debris = game:GetService("Debris")
+
+local CollectionService = game:GetService("CollectionService")
+
+local AnimationExtras = require(game.ReplicatedStorage.AnimationExtras)
+
+local SharedVehicleModule = require(game.ReplicatedStorage.SharedVehicleModule)
+
+function VehicleHandler:SpawnVehicle(VehicleName)
+	local StorageModel = game.ServerStorage.VehicleStorage:FindFirstChild(VehicleName)
+	
+	if not StorageModel then
+		return
+	end
+	
+	local Vehicle = StorageModel:Clone()
+	
+	local VehicleInfo = VehicleList[VehicleName]
+	
+	CollectionService:AddTag(Vehicle.PrimaryPart.RadioSound, "RadioSounds")
+	
+	for _, Object in pairs(Vehicle.Chassis.GunIgnore:GetChildren()) do
+		CollectionService:AddTag(Object, "GunIgnore")
+	end
+	
+	Vehicle.Parent = workspace.Vehicles
+	
+	Vehicle.PrimaryPart.AncestryChanged:Connect(function()
+		Vehicle:Destroy()
+	end)
+	
+	CollectionService:AddTag(Vehicle.Chassis.CarArea, "Obstacle")
+	
+	local VehicleInstance = VehicleClass.new(Vehicle)
+	
+	if VehicleInstance.HasAlarm then
+		
+		local SoundsTable = script.Assets.AlarmSounds:GetChildren()
+		
+		local AlarmSound = SoundsTable[math.random(1, #SoundsTable)]:Clone()
+		
+		AlarmSound.Parent = Vehicle.PrimaryPart
+		
+		AlarmSound.SoundGroup = Vehicle.PrimaryPart.ReverbGroup
+	end
+	
+	local PlateText = VehicleInstance.Stats.LicensePlate
+	
+	PlateText = PlateText == "" and SharedVehicleModule:GenerateLicensePlateText(Vehicle) or PlateText
+	
+	VehicleInstance:SetLicensePlates(PlateText)
+
+	for _, Attachment in pairs(Vehicle:GetDescendants()) do
+		if Attachment.Name == "LowCover" or Attachment.Name == "HighCover" then
+			CollectionService:AddTag(Attachment.Parent, "CoverCluster")
+		elseif Attachment:IsA("BasePart") then
+			Attachment:SetNetworkOwner(nil)
+		elseif Attachment.Name == "LightSegment" then
+			for _, Segment in pairs(Attachment.VisibleSegments:GetChildren()) do
+				Segment:SetAttribute("OriginalTransparency", Segment.Transparency)
+			end
+		
+		end
+	end
+	
+	for _, Seat in pairs(Vehicle.Seats:GetChildren()) do
+		local Prompt = script.Assets.EnterPrompt:Clone()
+
+		Prompt.ObjectText = VehicleInfo.MakeName .. " " .. VehicleInfo.ModelName
+
+		Prompt.ActionText = Seat:IsA("VehicleSeat") and "Drive" or "Enter"
+
+		Prompt.Triggered:Connect(function(Player)
+			VehicleInstance:EnterVehicle(Player.Character, Seat, Seat)
+		end)
+
+		Prompt.Parent = Seat.PromptAttachment
+
+
+	end
+	
+	local LockPrompt = script.Assets.LockPrompt:Clone()
+	
+	LockPrompt.Triggered:Connect(function(Player)
+		VehicleInstance:ToggleLock(not VehicleInstance.IsLocked)
+	end)
+	
+	LockPrompt.Parent = Vehicle.Seats.Seat1.PromptAttachment
+	
+	return Vehicle, VehicleInstance
+end
+
+function VehicleHandler:InitiateVehicle(Vehicle)
+	
+	local VehicleInfo = VehicleList[Vehicle.Name]
+	
+	local VehicleAssets = VehicleInfo.Assets
+	
+	local ScriptsFolder = script.Assets.Scripts:Clone()
+	
+	ScriptsFolder.Parent = Vehicle
+	
+	local ChassisHandler = require(ScriptsFolder.ChassisHandler)
+	
+	local Handling = VehicleInfo.Handling
+	
+	VehicleList[Vehicle.Name].Handling.FinalDrive = (Handling.RedLine * ChassisHandler.WheelRadius) / (Handling.GearRatios[#Handling.GearRatios] * Handling.TopSpeed)
+	
+	local VehicleInstance = VehicleClass.new(Vehicle)
+	
+	for _, Wheel in pairs(Vehicle.Chassis:GetDescendants()) do
+		if Wheel.Name == "Wheel" then
+			
+			local WheelSmoke = script.Assets.WheelSmoke:Clone()
+			
+			WheelSmoke.Parent = Wheel
+			
+			VehicleInstance:AddWheelModel(Wheel, VehicleAssets.TireModel, VehicleAssets.RimModel)
+		end
+	end
+	
+	local function Weld(Part1, Part0)
+		if Part1:IsA("BasePart") then
+			Part0 = Part0 or Vehicle.PrimaryPart
+
+			local Weld = Instance.new("WeldConstraint")
+
+			Weld.Part1 = Part1
+
+			Weld.Part0 = Part0
+			
+			Weld.Parent = Vehicle.Welds
+			
+			Part1.Anchored = false
+		end
+	end
+	
+	local FrontAttachment = Instance.new("Attachment")
+	
+	FrontAttachment.Name = "FrontEndAttachment"
+	
+	FrontAttachment.Parent = Vehicle.PrimaryPart
+	
+	local CarAreaSize = Vehicle.Chassis.CarArea.Size
+	
+	FrontAttachment.WorldPosition = Vehicle.Chassis.CarArea.Position + Vector3.new(0, CarAreaSize.Y * -.5, CarAreaSize.Z * -.5)
+	
+	CollectionService:AddTag(Vehicle.Chassis, "GunIgnore")
+	
+	for _, Object in pairs(Vehicle.Body:GetChildren()) do
+		Weld(Object)
+		
+		if Object:IsA("Model") then
+			for _, Part in pairs(Object:GetDescendants()) do
+				Weld(Part)
+			end
+		end
+	end
+	
+	for _, Sound in pairs(Vehicle.Effects:GetChildren()) do
+		Sound.Parent = Vehicle.Chassis.FloorPanel
+	end
+	
+	for _, Sound in pairs(script.Assets.SharedSounds:GetChildren()) do
+		local NewSound = Sound:Clone()
+		
+		NewSound.Parent = Vehicle.Chassis.FloorPanel
+	end
+	
+	local RadioSound = Vehicle.PrimaryPart.RadioSound
+
+	RadioSound.Station.Value = VehicleInfo.DefaultRadioStation
+	
+	if not table.find(VehicleInfo.Flags, "NoSteeringWheel") then
+		
+		local SteeringWheelFolder = Vehicle.Body.SteeringWheel
+		
+		local MainHinge = SteeringWheelFolder.Hinge
+		
+		MainHinge.Transparency = 1
+		
+		Weld(MainHinge)
+		
+		local NewSteeringWheelHinge = MainHinge:Clone()
+		
+		NewSteeringWheelHinge.Parent = SteeringWheelFolder.SteeringWheelModel
+		
+		local Motor = Instance.new("Motor6D")
+		
+		Motor.Name = "SteeringWheelMotor"
+		
+		Motor.Part0 = MainHinge
+		
+		Motor.Part1 = NewSteeringWheelHinge
+		
+		Motor.Parent = Vehicle.Constraints
+		
+		for _, Part in pairs(SteeringWheelFolder.SteeringWheelModel:GetChildren()) do
+			Weld(Part, SteeringWheelFolder.SteeringWheelModel.PrimaryPart)
+			
+			if Part.Color == Color3.new(0,1,0) then
+				Part.Parent = Vehicle.Chassis.IKControlTargets
+			end
+		end
+	end
+	
+	if table.find(VehicleInfo.Flags, "IsConvertible") then
+		
+		local ConvertibleAnimationParts = VehicleSeating.ConvertibleAnimations[VehicleInfo.ConvertibleAnimation].Parts
+		
+		for _, Model in pairs(Vehicle.Body.ConvertibleRoof:GetChildren()) do
+			local HingesFolder = Model.Hinges
+
+			for _, Part in pairs(HingesFolder:GetChildren()) do
+				Part.Transparency = 1
+			end
+
+			local ModelHinge = HingesFolder.Hinge:Clone()
+
+			ModelHinge.Parent = Model.MovableModel
+
+			Model.PrimaryPart = ModelHinge
+
+			local Motor6D = Instance.new("Motor6D")
+
+			Motor6D.Name = "Motor"
+
+			Motor6D.Part0 = HingesFolder.Hinge
+
+			Motor6D.Part1 = ModelHinge
+
+			Motor6D.Parent = Model
+
+			local OpenValue = Instance.new("BoolValue")
+
+			OpenValue.Name = "IsOpen"
+
+			OpenValue.Parent = Model
+
+			for _, Part in pairs(Model.MovableModel:GetDescendants()) do
+				Weld(Part, ModelHinge)
+			end
+		end
+		
+		for _, Model in pairs(Vehicle.Body.ConvertibleRoof:GetChildren()) do
+			
+			local HingesFolder = Model.Hinges
+			
+			for _, Part in pairs(HingesFolder:GetChildren()) do
+				local PartToWeldTo
+
+				local PartToWeldToName = ConvertibleAnimationParts[Model.Name].WeldTo
+
+				if PartToWeldToName then
+					PartToWeldTo = Vehicle.Body.ConvertibleRoof[PartToWeldToName].MovableModel.Hinge
+				end
+
+				Weld(Part, PartToWeldTo)
+			end
+		end
+	end
+	
+	for _, Target in pairs(Vehicle.Chassis.IKControlTargets:GetChildren()) do
+		Target.Transparency = 1
+	end
+	
+	for _, Model in pairs(Vehicle.Body.MovableParts:GetChildren()) do
+		local HingesFolder = Model.Hinges
+		
+		for _, Part in pairs(HingesFolder:GetChildren()) do
+			Part.Transparency = 1
+			
+			Weld(Part)
+		end
+		
+		local ModelHinge = HingesFolder.HingeClosed:Clone()
+		
+		ModelHinge.Parent = Model.MovableModel
+		
+		Model.PrimaryPart = ModelHinge
+		
+		local Motor6D = Instance.new("Motor6D")
+		
+		Motor6D.Name = "Motor"
+		
+		Motor6D.Part0 = HingesFolder.HingeClosed
+		
+		Motor6D.Part1 = ModelHinge
+		
+		Motor6D.Parent = Model
+		
+		local OpenValue = Instance.new("BoolValue")
+		
+		OpenValue.Name = "IsOpen"
+		
+		OpenValue.Parent = Model
+		
+		for _, Part in pairs(Model.MovableModel:GetDescendants()) do
+			Weld(Part, ModelHinge)
+		end
+	end
+	
+	for _, Part in pairs(Vehicle:GetDescendants()) do
+		if Part.Name == "LowCover" or Part.Name == "HighCover" then
+			local Attachment = Instance.new("Attachment")
+			
+			Attachment.Name = Part.Name
+			
+			local OValue = Instance.new("ObjectValue")
+			
+			OValue.Name = "Occupant"
+			
+			OValue.Parent = Attachment
+			
+			local DValue = Instance.new("Vector3Value")
+
+			DValue.Value = Part.FirePosition.Position
+			
+			DValue.Name = "FirePosition"
+
+			DValue.Parent = Attachment
+			
+			Attachment.Parent = Part.Parent
+			
+			Attachment.WorldCFrame = Part.CFrame
+			
+			if Part:IsDescendantOf(Vehicle.Body) then
+				OValue.Value = Attachment
+			end
+			
+			Part:Destroy()
+		end
+	end
+	
+	VehicleInstance:Destroy()
+	
+	SharedVehicleModule:InitiateConstraints(Vehicle)
+end
+
+return VehicleHandler
