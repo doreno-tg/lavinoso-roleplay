@@ -1,0 +1,54 @@
+local WantedHandler = {}
+
+local CollectionService = game:GetService("CollectionService")
+
+local Events = game.ReplicatedStorage.Events
+
+--local NPCHandler = require(game.ServerScriptService.NPCHandler)
+
+function WantedHandler:ChangeWantedLevel(Character, Level, ConsiderHigherLevels)
+	
+	local Player = game.Players:GetPlayerFromCharacter(Character)
+	
+	if not Player then
+		return
+	end
+	
+	local WantedLevelValue = Character.Properties.WantedLevel
+	
+	Level = math.clamp(Level, ConsiderHigherLevels and WantedLevelValue.Value or 0, 6)
+	
+	if WantedLevelValue.Value ~= Level then
+		WantedLevelValue.Value = Level
+		
+		Events.OnWantedLevelChanged:FireAllClients(Player)
+		
+		for _, NPC in pairs(workspace.NPCs:GetChildren()) do
+			if NPC.Properties.Team.Value == "Police" then
+
+				if Level > 0 then
+					NPC.Interactor:Fire("AddEnemy", Character)
+				else
+					NPC.Interactor:Fire("RemoveEnemy", Character)
+				end
+			end
+		end
+	end
+end
+
+function WantedHandler:UpdatePoliceNPC(NPC)
+	if NPC.Properties.Team.Value == "Police" then
+		for _, Combatant in pairs(workspace.PlayerCharacters:GetChildren()) do
+			local Level = Combatant.Properties.WantedLevel.Value
+			
+
+			if Level > 0 then
+				NPC.Interactor:Fire("AddEnemy", Combatant)
+			else
+				NPC.Interactor:Fire("RemoveEnemy", Combatant)
+			end
+		end
+	end
+end
+
+return WantedHandler
