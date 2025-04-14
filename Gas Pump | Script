@@ -1,0 +1,51 @@
+local partX = script.Parent.ExplodePart -- setting some variables
+local harmful = false
+local configs = script.Parent.Configurations
+
+if configs.StaticObject.Value == true then -- if it's a static object then we don't need any scripting
+	script.Disabled = true
+end
+
+if configs.CanExplode.Value == false then -- if it won't explode then we want everything to be anchored
+	for i, v in pairs(script.Parent:GetChildren()) do
+		if v:IsA("BasePart") then -- if it is a part then ...
+			v.Anchored = true -- anchore it
+		end
+	end
+end
+
+partX.ChildRemoved:connect(function(obj) -- if a child is removed from a partcular part then ...
+	if obj:IsA("Weld") and configs.CanBurn.Value == true then -- if a weld was removed and we can burn then ...
+		wait(0.4)
+		local explosion = Instance.new("Explosion") -- make an explosion
+		explosion.Parent = script.Parent.ExplosiveRemains
+		explosion.Position = script.Parent.ExplosiveRemains.Position
+		for i = 1, 2 do	 -- make some dense black smoke because gas is burning
+			local smoke = Instance.new("Smoke")
+			smoke.Parent = script.Parent.ExplosiveRemains
+			smoke.Color = Color3.new(0,0,0)
+			smoke.RiseVelocity = 15
+			smoke.Size = 5
+			smoke.Opacity = 1
+		end
+		for i, v in pairs(script.Parent:GetChildren()) do
+			if v.Name == "Remains" then
+				local fire = Instance.new("Fire") -- make some fire as well
+				fire.Parent = v
+				fire.Heat = 25
+				fire.Size = 15
+			end
+		end
+		if configs.CanDamage.Value == true then -- if we could damage then set a variable to let other parts of the script know that the time has come when we can now damage players
+			harmful = true
+		end
+	end
+end)
+
+script.Parent.NearArea.Touched:connect(function(hit) -- if someone touches, or at least comes close to the pump then ...
+	if harmful == true  and hit.Parent:FindFirstChild("Humanoid") then -- if it has a humanoid then ...
+		local newScript = script.PlayerDamageScript:Clone() -- duplicate a script
+		newScript.Parent = hit -- put it in the part that came close
+		newScript.Disabled = false -- and then unleash the scripts power (which is putting fire in the part and damaging the player)
+	end
+end)
