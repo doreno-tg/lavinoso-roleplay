@@ -1,0 +1,253 @@
+local NPCHandler = {}
+
+local PedModels = require(game.ReplicatedStorage.PedModels)
+
+local Loadouts = require(game.ReplicatedStorage.Loadouts)
+
+local CollisionHandler = require(game.ReplicatedStorage.CollisionHandler)
+
+local AvatarModule = require(game.ServerScriptService.AvatarModule)
+
+local PedGroups = require(game.ReplicatedStorage.PedGroups)
+
+local ItemList = require(game.ReplicatedStorage.ItemList)
+
+local Limbs = {
+	"Head",
+	"LeftArm",
+	"RightArm",
+	"LeftLeg",
+	"RightLeg",
+	"Torso",
+}
+
+local BuildRagdoll = require(game.ReplicatedStorage:WaitForChild("buildRagdoll"))
+
+local NPCClass = require(game.ServerScriptService.NPCClass)
+
+local CollectionService = game:GetService("CollectionService")
+
+function NPCHandler:SpawnNPC(Model, ModelAttributes, ExtraAssets, ExtraInfo)
+	
+	ExtraInfo = ExtraInfo or {}
+	
+	local ModelInfo = {}
+	
+	for Index, Value in pairs(PedModels[Model]) do
+		ModelInfo[Index] = Value
+	end
+	
+	for Index, Value in pairs(ExtraInfo) do
+		ModelInfo[Index] = Value
+	end
+	
+	local AssetsList = {}
+	
+	local ModelAssets = ModelInfo.Assets
+	
+	ExtraAssets = ExtraAssets or {}
+	
+	for _, Asset in pairs(ExtraAssets) do
+		table.insert(AssetsList, Asset)
+	end
+	
+	for _, Asset in pairs(ModelAssets) do
+		table.insert(AssetsList, Asset)
+	end
+
+	local NPC = game.ServerStorage.CombatNPC:Clone()
+	
+	local NPCValue = script.NPCValue:Clone()
+
+	NPCValue.Name = Model
+	
+	NPCValue.Value = NPC
+	
+	NPCValue.Parent = game.ServerStorage.NPCValues
+	
+	local Worn = {
+		Shirt = "",
+		Pants = "",
+	}
+	
+	local function WearClothingObject(AssetId)
+		
+		
+		
+		local ExistingAsset = game.ServerStorage.ClothingAssets:FindFirstChild(tostring(AssetId)) or _G.LoadAsset(AssetId)
+		
+		if not ExistingAsset then
+			return
+		end
+		
+		local Object = ExistingAsset:Clone()
+
+		if Object:IsA("Accessory") then
+			NPC.Humanoid:AddAccessory(Object)
+		else
+			Object.Parent = NPC
+			
+			for Class, WornObject in pairs(Worn) do
+				if Object:IsA(Class) then
+					Worn[Class] = Object
+				end
+			end
+		end
+	end
+	
+	for _, AssetId in pairs(AssetsList) do
+		if type(AssetId) == "table" then
+			WearClothingObject(AssetId[math.random(1, #AssetId)])
+		else
+			WearClothingObject(AssetId)
+		end
+	end
+	
+	for Class, WornObject in pairs(Worn) do
+		
+		if WornObject == "" then
+			WearClothingObject(_G.BackupClothing[Class])
+		end
+	end
+	
+	for _, LoadoutComponent in pairs(Loadouts[ModelInfo.Loadout]) do
+		
+		local ToolInfo = nil
+		
+		local LoadoutType = LoadoutComponent.LoadoutType
+		
+		if LoadoutType == "Single" then
+			ToolInfo = LoadoutComponent
+		elseif LoadoutType == "Random" then
+			local Sum = 0
+			
+			local RangeTable = {}
+			
+			for Index, PToolInfo in pairs(LoadoutComponent.Tools) do
+				RangeTable[Index] = {Min = Sum, Max = Sum + PToolInfo.Chance}
+				Sum = Sum + PToolInfo.Chance
+			end
+			
+			local RandomNumber = math.random()
+			
+			local ChosenIndex = nil
+			
+			for Index, Chances in pairs(RangeTable) do
+				--warn(Index, Chances.Max, Chances.Min, LoadoutComponent.Tools[Index])
+				if math.clamp(RandomNumber, Chances.Min, Chances.Max) == RandomNumber then
+					ChosenIndex = Index
+				end
+			end
+			
+			ToolInfo = LoadoutComponent.Tools[ChosenIndex]
+		end
+		
+		if ToolInfo then
+			
+			local ItemInfo = ItemList[ToolInfo.Tool]
+			
+			local Tool = game.ServerStorage.ItemStorage[ToolInfo.Tool]:Clone()
+			
+			if ItemInfo.DataType == "Ranged" then
+				Tool.InfoFolder.Ammo.Value = ItemInfo.TypeProperties.MaxAmmo
+			end
+			
+			Tool.Parent = NPCValue.Tools
+		end
+	end
+	
+	NPC.Name = Model
+	
+	local NPCInstance = NPCClass.new(NPC)
+	
+	NPC.Properties.Invincible.Value = ModelInfo.Invincible == true
+
+	NPC.Properties.Team.Value = ModelInfo.RelationshipGroup
+	
+	AvatarModule:ChangeGender(NPC, string.sub(Model, 1, 1), string.sub(Model, 3, 3))
+	
+	NPC.Properties.ModelName.Value = Model
+	
+	NPC.Properties.Accuracy.Value = ModelInfo.Accuracy
+	
+	NPC.Properties.AnimationPack.Value = ModelInfo.AnimationPack
+	
+	if ModelAttributes then
+		for Property, Value in pairs(ModelAttributes) do
+			NPC.Properties[Property].Value = Value
+		end
+	end
+	
+	CollectionService:AddTag(NPC.Humanoid, "Ragdoll")
+	
+	BuildRagdoll(NPC.Humanoid)
+
+	require(game.ReplicatedStorage.RagdollProcesser)
+
+	for _, Part in pairs(Limbs) do
+		NPC["Body Colors"][Part .. "Color"] = ModelInfo.SkinColor
+	end
+	
+	CollectionService:AddTag(NPC, "Combatant")
+
+	local AncestryConnection = NPC.AncestryChanged:Connect(function()
+		if NPC.Parent == nil then
+			NPCValue:Destroy()
+		end
+	end)
+	
+	
+	CollisionHandler:SetModelCollisionGroup(NPC, "Peds")
+	
+	local Connection
+	
+	Connection = NPC.PrimaryPart.AncestryChanged:Connect(function()
+		if NPC.Parent == nil or not NPC.PrimaryPart then
+			if NPC.Parent ~= nil then
+				NPC:Destroy()
+			end
+			Connection:Disconnect()
+			Connection = nil
+		end
+	end)
+	
+	return NPC
+end
+
+function NPCHandler:SpawnNPCFromGroup(Group, ...)
+	
+	local CountingTable = {}
+	
+	for _, ModelName in pairs(PedGroups[Group]) do
+		CountingTable[ModelName] = 0
+	end
+	
+	for _, NPC in pairs(workspace.NPCs:GetChildren()) do
+		
+		local ModelName = NPC.Properties.ModelName.Value
+		
+		if table.find(PedGroups[Group], ModelName) then
+			CountingTable[ModelName] = CountingTable[ModelName] + 1
+		end
+	end
+	
+	local LeastSpawnedNumber = math.huge
+	
+	for PotModel, Amount in pairs(CountingTable) do
+		if Amount < LeastSpawnedNumber then
+			LeastSpawnedNumber = Amount
+		end
+	end
+	
+	local PossibleModels = {}
+	
+	for _, ModelName in pairs(PedGroups[Group]) do
+		if CountingTable[ModelName] == LeastSpawnedNumber then
+			table.insert(PossibleModels, ModelName)
+		end
+	end
+	
+	return NPCHandler:SpawnNPC(PossibleModels[math.random(1, #PossibleModels)], ...)
+end
+
+return NPCHandler
