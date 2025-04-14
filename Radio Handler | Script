@@ -1,0 +1,77 @@
+local RadioHandler = {}
+
+local CollectionService = game:GetService("CollectionService")
+
+local StationSongsFolder = game.ServerStorage.StationSongs
+
+local RadioStations = require(game.ReplicatedStorage.RadioStations)
+
+function RadioHandler:SetSoundToStation(Sound, Station)
+	Sound.Station.Value = Station
+	
+	if RadioStations[Station] then
+		local ReferenceSound = StationSongsFolder[Station]
+
+		Sound.SoundId = ReferenceSound.SoundId
+
+		Sound.TimePosition = ReferenceSound.TimePosition
+
+		Sound.Playing = true
+	else
+		Sound.Playing = false
+	end
+end
+
+function RadioHandler:RefreshAllSoundsForStation(Station)
+	for _, Sound in pairs(CollectionService:GetTagged("RadioSounds")) do
+		if Sound.Station.Value == Station then
+			RadioHandler:SetSoundToStation(Sound, Station)
+		end
+	end
+end
+
+function RadioHandler:Initiate()
+	for Station, StationInfo in pairs(RadioStations) do
+		
+		if Station == "Off" then
+			continue
+		end
+		
+		local TotalSongCount = #StationInfo.Audios
+		
+		local CurrentIndex = math.random(1, TotalSongCount)
+		
+		local StationSound = StationSongsFolder[Station]
+		
+		task.spawn(function()
+			while true do
+				
+				StationSound.SoundId = "rbxassetid://" .. StationInfo.Audios[CurrentIndex].Id
+				
+				RadioHandler:RefreshAllSoundsForStation(Station)
+				
+				local Success, Error = pcall(function()
+					StationSound:Play()
+				end)
+				
+				if Success then
+					StationSound.Ended:Wait()
+				end
+				
+				task.wait(1)
+				
+				CurrentIndex = math.clamp(CurrentIndex + 1, 1, TotalSongCount) == CurrentIndex + 1 and CurrentIndex + 1 or 1
+			end
+		end)
+	end
+	
+	wait(5)
+	
+	for _, Sound in pairs(CollectionService:GetTagged("RadioSounds")) do
+		RadioHandler:SetSoundToStation(Sound, Sound.Station.Value)
+	end
+end
+
+
+
+return RadioHandler
